@@ -1,4 +1,4 @@
-import { Context, Redacted, Schema } from "effect";
+import { Context, Option, Redacted, Schema } from "effect";
 
 export const DatabaseConfigFields = {
   db: Schema.Struct({
@@ -34,3 +34,34 @@ export class EmbeddingConfigValues extends Context.Service<
   EmbeddingConfigValues,
   EmbeddingConfigShape
 >()("app/config/EmbeddingConfigValues") {}
+
+export const S3ResourceTargetSchema = Schema.Struct({
+  endpoint: Schema.String,
+  region: Schema.String,
+  bucket: Schema.String,
+  accessKeyId: Schema.String,
+  secretAccessKey: Schema.String,
+});
+export type S3ResourceTarget = typeof S3ResourceTargetSchema.Type;
+
+export const ResourcesSecretSchema = Schema.Struct({
+  s3: Schema.Record(Schema.String, S3ResourceTargetSchema),
+});
+export type ResourcesSecretSchema = typeof ResourcesSecretSchema.Type;
+
+export const ResourcesConfigFields = {
+  resources: Schema.Redacted(ResourcesSecretSchema),
+};
+
+export const ResourcesConfigSchema = Schema.Struct(ResourcesConfigFields);
+export type ResourcesConfigSchema = typeof ResourcesConfigSchema.Type;
+
+export interface ResourcesConfigShape {
+  readonly s3: Record<string, S3ResourceTarget>;
+  readonly getS3Resource: (name: string) => Option.Option<S3ResourceTarget>;
+}
+
+export class ResourcesConfigValues extends Context.Service<
+  ResourcesConfigValues,
+  ResourcesConfigShape
+>()("app/config/ResourcesConfigValues") {}
