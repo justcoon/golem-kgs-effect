@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Context, Redacted, Schema } from "effect";
 
 export const DatabaseConfigFields = {
   db: Schema.Struct({
@@ -12,3 +12,25 @@ export const DatabaseConfigFields = {
 
 export const DatabaseConfigSchema = Schema.Struct(DatabaseConfigFields);
 export type DatabaseConfigSchema = typeof DatabaseConfigSchema.Type;
+
+export const EmbeddingConfigFields = {
+  embedding: Schema.Struct({
+    api_base: Schema.String,
+    model: Schema.String,
+    apiKey: Schema.Redacted(Schema.String),
+  }),
+};
+
+export const EmbeddingConfigSchema = Schema.Struct(EmbeddingConfigFields);
+export type EmbeddingConfigSchema = typeof EmbeddingConfigSchema.Type;
+
+export interface EmbeddingConfigShape {
+  readonly api_base: string;
+  readonly model: string;
+  readonly apiKey: Redacted.Redacted<string>;
+}
+
+export class EmbeddingConfigValues extends Context.Service<
+  EmbeddingConfigValues,
+  EmbeddingConfigShape
+>()("app/config/EmbeddingConfigValues") {}

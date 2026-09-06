@@ -13,6 +13,8 @@ secretDefaults:
     db:
       user: "{{ POSTGRES_USER }}"
       password: "{{ POSTGRES_PASSWORD }}"
+    embedding:
+      apiKey: "{{ EMBEDDING_API_KEY }}"
 
 components:
   golem-kgs-effect:effect-main:
@@ -23,6 +25,9 @@ components:
         host: "{{ POSTGRES_HOST }}"
         db: "{{ POSTGRES_DB }}"
         port: "{{ POSTGRES_PORT }}"
+      embedding:
+        api_base: "{{ EMBEDDING_API_BASE }}"
+        model: "{{ EMBEDDING_MODEL }}"
 
 httpApi:
   deployments:
