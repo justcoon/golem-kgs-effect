@@ -1,11 +1,3 @@
-# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
-# Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
-
-# Field reference: https://learn.golem.cloud/app-manifest#field-reference
-# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
-
 manifestVersion: 1.5.0
 
 app: golem-kgs-effect
@@ -15,13 +7,26 @@ environments:
     server: local
   cloud:
     server: cloud
+
+secretDefaults:
+  local:
+    db:
+      user: "{{ POSTGRES_USER }}"
+      password: "{{ POSTGRES_PASSWORD }}"
+
 components:
   golem-kgs-effect:effect-main:
     dir: ""
     templates: effect
+    config:
+      db:
+        host: "{{ POSTGRES_HOST }}"
+        db: "{{ POSTGRES_DB }}"
+        port: "{{ POSTGRES_PORT }}"
+
 httpApi:
   deployments:
     local:
-    - domain: golem-kgs-effect.localhost:9006
-      agents:
-        Counter: {}
+      - domain: golem-kgs-effect.localhost:9006
+        agents:
+          Counter: {}

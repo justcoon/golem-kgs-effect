@@ -1,10 +1,5 @@
 import { Effect, Ref, Schema } from "effect";
-import {
-  defineAgent,
-  Http,
-  method,
-  Snapshot,
-} from "@golemcloud/effect-golem";
+import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 
 export const Counter = defineAgent({
   name: "Counter",
