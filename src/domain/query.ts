@@ -1,4 +1,6 @@
 import { Schema } from "effect";
+import { Edge } from "./relationship.js";
+import { Entity } from "./entity.js";
 
 export const NeighborhoodQuery = Schema.Struct({
   seedEntityIds: Schema.Array(Schema.String),
@@ -41,3 +43,49 @@ export const SearchResultItem = Schema.Struct({
   metadata: Schema.Record(Schema.String, Schema.Unknown),
 });
 export type SearchResultItem = typeof SearchResultItem.Type;
+
+export const PathFindingQuery = Schema.Struct({
+  sourceEntityId: Schema.String,
+  targetEntityId: Schema.String,
+  maxDepth: Schema.optional(Schema.Number),
+  relationTypes: Schema.optional(Schema.Array(Schema.String)),
+  direction: Schema.optional(Schema.Literals(["OUTBOUND", "INBOUND", "BOTH"])),
+});
+export type PathFindingQuery = typeof PathFindingQuery.Type;
+
+export const GraphPath = Schema.Struct({
+  entityIds: Schema.Array(Schema.String),
+  edges: Schema.Array(Edge),
+  totalWeight: Schema.Number,
+});
+export type GraphPath = typeof GraphPath.Type;
+
+export const PathFindingResult = Schema.Struct({
+  paths: Schema.Array(GraphPath),
+  shortestPathLength: Schema.NullOr(Schema.Number),
+});
+export type PathFindingResult = typeof PathFindingResult.Type;
+
+export const GraphRAGQuery = Schema.Struct({
+  query: Schema.String,
+  topK: Schema.optional(Schema.Number),
+  maxHops: Schema.optional(Schema.Number),
+  minConfidence: Schema.optional(Schema.Number),
+  relationTypes: Schema.optional(Schema.Array(Schema.String)),
+});
+export type GraphRAGQuery = typeof GraphRAGQuery.Type;
+
+export const GraphRAGContextBundle = Schema.Struct({
+  query: Schema.String,
+  entities: Schema.Array(Entity),
+  relationships: Schema.Array(Edge),
+  relevantChunks: Schema.Array(SearchResultItem),
+  formattedContextPrompt: Schema.String,
+  metadata: Schema.Struct({
+    totalEntities: Schema.Number,
+    totalRelationships: Schema.Number,
+    totalChunks: Schema.Number,
+    retrievalDurationMs: Schema.Number,
+  }),
+});
+export type GraphRAGContextBundle = typeof GraphRAGContextBundle.Type;

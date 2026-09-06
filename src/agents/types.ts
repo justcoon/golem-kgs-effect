@@ -145,6 +145,87 @@ export const EntityResultSchema = Schema.Struct({
 });
 export type EntityResult = typeof EntityResultSchema.Type;
 
+// --- Path Finding Schemas ---
+
+export const PathFindingQuerySchema = Schema.Struct({
+  sourceEntityId: Schema.String,
+  targetEntityId: Schema.String,
+  maxDepth: Schema.optional(Schema.Number),
+  relationTypes: Schema.optional(Schema.Array(Schema.String)),
+  direction: Schema.optional(Schema.Literals(["OUTBOUND", "INBOUND", "BOTH"])),
+});
+export type PathFindingQuery = typeof PathFindingQuerySchema.Type;
+
+export const GraphPathSchema = Schema.Struct({
+  entityIds: Schema.Array(Schema.String),
+  edges: Schema.Array(EdgeResultSchema),
+  totalWeight: Schema.Number,
+});
+export type GraphPath = typeof GraphPathSchema.Type;
+
+export const PathFindingResultSchema = Schema.Struct({
+  paths: Schema.Array(GraphPathSchema),
+  shortestPathLength: Schema.NullOr(Schema.Number),
+});
+export type PathFindingResult = typeof PathFindingResultSchema.Type;
+
+// --- GraphRAG Schemas ---
+
+export const GraphRAGQuerySchema = Schema.Struct({
+  query: Schema.String,
+  topK: Schema.optional(Schema.Number),
+  maxHops: Schema.optional(Schema.Number),
+  minConfidence: Schema.optional(Schema.Number),
+  relationTypes: Schema.optional(Schema.Array(Schema.String)),
+});
+export type GraphRAGQuery = typeof GraphRAGQuerySchema.Type;
+
+export const GraphRAGContextBundleSchema = Schema.Struct({
+  query: Schema.String,
+  entities: Schema.Array(EntityResultSchema),
+  relationships: Schema.Array(EdgeResultSchema),
+  relevantChunks: Schema.Array(SearchResultItemSchema),
+  formattedContextPrompt: Schema.String,
+  metadata: Schema.Struct({
+    totalEntities: Schema.Number,
+    totalRelationships: Schema.Number,
+    totalChunks: Schema.Number,
+    retrievalDurationMs: Schema.Number,
+  }),
+});
+export type GraphRAGContextBundle = typeof GraphRAGContextBundleSchema.Type;
+
+// --- KnowledgeBaseAgent Schemas (Interface Contract) ---
+
+export const CitationSchema = Schema.Struct({
+  documentId: Schema.String,
+  chunkId: Schema.String,
+  sourceUri: Schema.String,
+  title: Schema.String,
+  excerpt: Schema.String,
+});
+export type Citation = typeof CitationSchema.Type;
+
+export const AnswerResponseSchema = Schema.Struct({
+  question: Schema.String,
+  answer: Schema.String,
+  citations: Schema.Array(CitationSchema),
+  groundedEntities: Schema.Array(EntityResultSchema),
+  groundedRelationships: Schema.Array(EdgeResultSchema),
+  confidenceScore: Schema.Number,
+});
+export type AnswerResponse = typeof AnswerResponseSchema.Type;
+
+export const KnowledgeBaseOverviewSchema = Schema.Struct({
+  totalDocuments: Schema.Number,
+  totalChunks: Schema.Number,
+  totalEntities: Schema.Number,
+  totalRelationships: Schema.Number,
+  supportedSources: Schema.Array(Schema.String),
+  lastSynchronizedAt: Schema.NullOr(Schema.String),
+});
+export type KnowledgeBaseOverview = typeof KnowledgeBaseOverviewSchema.Type;
+
 // --- Helper Utilities ---
 
 /**

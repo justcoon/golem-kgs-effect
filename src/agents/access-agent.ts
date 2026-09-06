@@ -1,10 +1,15 @@
 import { Effect, Redacted, Schema } from "effect";
 import { defineAgent, method } from "@golemcloud/effect-golem";
-import { PgClient } from "@golemcloud/effect-golem/postgres";
+import { createPostgresClient } from "../storage/database-client.js";
 import {
+  AnswerResponseSchema,
   EntityResultSchema,
+  GraphRAGContextBundleSchema,
+  KnowledgeBaseOverviewSchema,
   NeighborhoodResponseSchema,
+  PathFindingResultSchema,
   SearchResponseSchema,
+  type Citation,
   type SearchResultItem,
 } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
@@ -13,13 +18,21 @@ import {
   EntityRepository,
   GraphRepository,
 } from "../storage/index.js";
-import { EmbeddingService } from "../pipeline/embedding-service.js";
+import { EmbeddingService, GraphRAGService } from "../pipeline/index.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
+
+interface CountRow {
+  readonly count: bigint | number | string;
+}
+
+interface SyncRow {
+  readonly last_sync: Date | string | null;
+}
 
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
   description:
-    "Stateless ephemeral gateway for high-throughput concurrent search and graph traversal",
+    "Stateless ephemeral gateway for high-throughput concurrent search, graph traversal, GraphRAG, and question-answering",
   mode: "ephemeral",
   config: AppAgentConfig,
   constructorParams: {},
@@ -54,21 +67,54 @@ export const KnowledgeAccessAgent = defineAgent({
       success: Schema.NullOr(EntityResultSchema),
       description: "Finds an entity by exact ID",
     }),
+    graphRag: method({
+      params: {
+        query: Schema.String,
+        topK: Schema.optional(Schema.Number),
+        maxHops: Schema.optional(Schema.Number),
+        minConfidence: Schema.optional(Schema.Number),
+        relationTypes: Schema.optional(Schema.Array(Schema.String)),
+      },
+      success: GraphRAGContextBundleSchema,
+      description:
+        "Executes GraphRAG retrieval pipeline returning structured context and formatted prompt",
+    }),
+    findPaths: method({
+      params: {
+        sourceEntityId: Schema.String,
+        targetEntityId: Schema.String,
+        maxDepth: Schema.optional(Schema.Number),
+        relationTypes: Schema.optional(Schema.Array(Schema.String)),
+        direction: Schema.optional(
+          Schema.Literals(["OUTBOUND", "INBOUND", "BOTH"]),
+        ),
+      },
+      success: PathFindingResultSchema,
+      description:
+        "Discovers multi-hop relational paths between source and target entities",
+    }),
+    ask: method({
+      params: {
+        query: Schema.String,
+        topK: Schema.optional(Schema.Number),
+        maxHops: Schema.optional(Schema.Number),
+        generateAnswer: Schema.optional(Schema.Boolean),
+      },
+      success: AnswerResponseSchema,
+      description:
+        "Answers natural language questions with GraphRAG context retrieval, synthesis, and source citations",
+    }),
+    getOverview: method({
+      params: {},
+      success: KnowledgeBaseOverviewSchema,
+      description:
+        "Returns statistical overview of the knowledge base (document count, chunk count, entity count, relationship count)",
+    }),
   },
 }).implement(() =>
   Effect.gen(function* () {
     const config = yield* AppAgentConfig;
-    const host = yield* config.db.host;
-    const db = yield* config.db.db;
-    const port = yield* config.db.port;
-    const user = Redacted.value(yield* config.db.user.get);
-    const password = Redacted.value(yield* config.db.password.get);
-
-    const connectionAddress = `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
-    const sql = yield* PgClient.make({
-      connectionAddress,
-      decodeTemporal: "date",
-    });
+    const sql = yield* createPostgresClient(config);
 
     const api_base = yield* config.embedding.api_base;
     const model = yield* config.embedding.model;
@@ -160,6 +206,221 @@ export const KnowledgeAccessAgent = defineAgent({
             description: entity.description ?? null,
             properties: entity.properties,
             metadata: entity.metadata,
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      graphRag: (query) =>
+        Effect.gen(function* () {
+          const service = yield* GraphRAGService;
+          const bundle = yield* service.retrieveContext({
+            query: query.query,
+            topK: query.topK,
+            maxHops: query.maxHops,
+            minConfidence: query.minConfidence,
+            relationTypes: query.relationTypes
+              ? Array.from(query.relationTypes)
+              : undefined,
+          });
+
+          return {
+            query: bundle.query,
+            entities: bundle.entities.map((e) => ({
+              id: e.id,
+              name: e.name,
+              entityType: e.entityType,
+              description: e.description ?? null,
+              properties: e.properties,
+              metadata: e.metadata,
+            })),
+            relationships: bundle.relationships.map((e) => ({
+              id: e.id,
+              sourceId: e.sourceId,
+              targetId: e.targetId,
+              relationType: e.relationType,
+              weight: e.weight,
+              confidence: e.confidence,
+              properties: e.properties,
+            })),
+            relevantChunks: bundle.relevantChunks.map((c) => ({
+              chunkId: c.chunkId,
+              documentId: c.documentId,
+              content: c.content,
+              score: c.score,
+              metadata: c.metadata,
+            })),
+            formattedContextPrompt: bundle.formattedContextPrompt,
+            metadata: bundle.metadata,
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      findPaths: (query) =>
+        Effect.gen(function* () {
+          const graphRepo = yield* GraphRepository;
+          const result = yield* graphRepo.findPaths({
+            sourceEntityId: query.sourceEntityId,
+            targetEntityId: query.targetEntityId,
+            maxDepth: query.maxDepth,
+            relationTypes: query.relationTypes
+              ? Array.from(query.relationTypes)
+              : undefined,
+            direction: query.direction,
+          });
+
+          return {
+            paths: result.paths.map((p) => ({
+              entityIds: Array.from(p.entityIds),
+              edges: p.edges.map((e) => ({
+                id: e.id,
+                sourceId: e.sourceId,
+                targetId: e.targetId,
+                relationType: e.relationType,
+                weight: e.weight,
+                confidence: e.confidence,
+                properties: e.properties,
+              })),
+              totalWeight: p.totalWeight,
+            })),
+            shortestPathLength: result.shortestPathLength,
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      ask: ({ query, topK = 5, maxHops = 2, generateAnswer = true }) =>
+        Effect.gen(function* () {
+          const graphRagService = yield* GraphRAGService;
+          const bundle = yield* graphRagService.retrieveContext({
+            query,
+            topK,
+            maxHops,
+          });
+
+          const citations: Citation[] = bundle.relevantChunks.map((chunk) => {
+            const meta =
+              chunk.metadata && typeof chunk.metadata === "object"
+                ? (chunk.metadata as Record<string, unknown>)
+                : {};
+
+            const sourceUri =
+              typeof meta.sourceUri === "string"
+                ? meta.sourceUri
+                : `doc://${chunk.documentId}`;
+
+            const title =
+              typeof meta.title === "string"
+                ? meta.title
+                : `Document ${chunk.documentId}`;
+
+            const excerpt =
+              chunk.content.length > 250
+                ? `${chunk.content.slice(0, 247)}...`
+                : chunk.content;
+
+            return {
+              documentId: chunk.documentId,
+              chunkId: chunk.chunkId,
+              sourceUri,
+              title,
+              excerpt,
+            };
+          });
+
+          const groundedEntities = bundle.entities.map((e) => ({
+            id: e.id,
+            name: e.name,
+            entityType: e.entityType,
+            description: e.description ?? null,
+            properties: e.properties,
+            metadata: e.metadata,
+          }));
+
+          const groundedRelationships = bundle.relationships.map((e) => ({
+            id: e.id,
+            sourceId: e.sourceId,
+            targetId: e.targetId,
+            relationType: e.relationType,
+            weight: e.weight,
+            confidence: e.confidence,
+            properties: e.properties,
+          }));
+
+          let answer = "";
+          if (generateAnswer) {
+            if (
+              bundle.relevantChunks.length > 0 ||
+              bundle.entities.length > 0
+            ) {
+              const entityList = bundle.entities
+                .slice(0, 5)
+                .map((e) => `${e.name} (${e.entityType})`)
+                .join(", ");
+              const entityPart = entityList
+                ? ` Key entities: ${entityList}.`
+                : "";
+              const chunkPart = bundle.relevantChunks[0]
+                ? ` Excerpt: "${bundle.relevantChunks[0].content.trim().slice(0, 200)}..."`
+                : "";
+              answer = `Grounded response for "${query}":${entityPart}${chunkPart}`;
+            } else {
+              answer = `No matching knowledge graph entities or documents found for query "${query}".`;
+            }
+          }
+
+          const topScore = bundle.relevantChunks[0]?.score ?? 0.5;
+          const confidenceScore = Number(
+            Math.max(0.1, Math.min(0.99, topScore)).toFixed(4),
+          );
+
+          return {
+            question: query,
+            answer,
+            citations,
+            groundedEntities,
+            groundedRelationships,
+            confidenceScore,
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      getOverview: () =>
+        Effect.gen(function* () {
+          const docRows = (yield* sql<CountRow>`
+            SELECT COUNT(*) AS count FROM documents
+          `) as ReadonlyArray<CountRow>;
+
+          const chunkRows = (yield* sql<CountRow>`
+            SELECT COUNT(*) AS count FROM chunks
+          `) as ReadonlyArray<CountRow>;
+
+          const entityRows = (yield* sql<CountRow>`
+            SELECT COUNT(*) AS count FROM entities
+          `) as ReadonlyArray<CountRow>;
+
+          const edgeRows = (yield* sql<CountRow>`
+            SELECT COUNT(*) AS count FROM edges
+          `) as ReadonlyArray<CountRow>;
+
+          const syncRows = (yield* sql<SyncRow>`
+            SELECT MAX(last_sync_time) AS last_sync FROM sync_checkpoints
+          `) as ReadonlyArray<SyncRow>;
+
+          const totalDocuments = Number(docRows[0]?.count ?? 0);
+          const totalChunks = Number(chunkRows[0]?.count ?? 0);
+          const totalEntities = Number(entityRows[0]?.count ?? 0);
+          const totalRelationships = Number(edgeRows[0]?.count ?? 0);
+
+          const rawSync = syncRows[0]?.last_sync;
+          const lastSynchronizedAt = rawSync
+            ? new Date(rawSync).toISOString()
+            : null;
+
+          const supportedSources =
+            Object.keys(s3Targets).length > 0 ? ["s3"] : ["s3"];
+
+          return {
+            totalDocuments,
+            totalChunks,
+            totalEntities,
+            totalRelationships,
+            supportedSources,
+            lastSynchronizedAt,
           };
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
     };

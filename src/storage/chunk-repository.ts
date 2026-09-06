@@ -9,10 +9,10 @@ import {
 import {
   type HybridSearchQuery,
   type KeywordSearchQuery,
-  type SearchResultItem,
   type VectorSearchQuery,
 } from "../domain/query.js";
 import { type RawDocument } from "../domain/provenance.js";
+import { fuseRankings } from "../pipeline/fusion-utils.js";
 
 interface DocumentRow {
   readonly id: string;
@@ -195,6 +195,20 @@ ChunkRepository.Default = Layer.effect(
         return rows.map(mapChunkRow);
       });
 
+    const getEntityIdsForChunks = (chunkIds: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        if (chunkIds.length === 0) {
+          return [] as ReadonlyArray<string>;
+        }
+        const rows = (yield* sql<{ entity_id: string }>`
+            SELECT DISTINCT entity_id
+            FROM entity_chunks
+            WHERE chunk_id = ANY(${chunkIds})
+          `) as ReadonlyArray<{ entity_id: string }>;
+
+        return rows.map((r) => r.entity_id);
+      });
+
     const searchVector = (query: VectorSearchQuery) =>
       Effect.gen(function* () {
         const vec = Pg.vector(query.embedding);
@@ -276,42 +290,20 @@ ChunkRepository.Default = Layer.effect(
           }),
         ]);
 
-        const rrfScores = new Map<
-          string,
-          { score: number; item: SearchResultItem }
-        >();
+        const vecRanked = vecResults.map((item) => ({
+          id: item.chunkId,
+          item,
+        }));
+        const keyRanked = keyResults.map((item) => ({
+          id: item.chunkId,
+          item,
+        }));
 
-        vecResults.forEach((item, index) => {
-          const rank = index + 1;
-          const rrfScore = 1 / (rrfK + rank);
-          const current = rrfScores.get(item.chunkId);
-          if (current) {
-            current.score += rrfScore;
-          } else {
-            rrfScores.set(item.chunkId, { score: rrfScore, item });
-          }
-        });
-
-        keyResults.forEach((item, index) => {
-          const rank = index + 1;
-          const rrfScore = 1 / (rrfK + rank);
-          const current = rrfScores.get(item.chunkId);
-          if (current) {
-            current.score += rrfScore;
-          } else {
-            rrfScores.set(item.chunkId, { score: rrfScore, item });
-          }
-        });
-
-        const sorted = Array.from(rrfScores.values())
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit)
-          .map(({ score, item }) => ({
-            ...item,
-            score,
-          }));
-
-        return sorted;
+        const fused = fuseRankings([vecRanked, keyRanked], rrfK, limit);
+        return fused.map(({ item, score }) => ({
+          ...item.item,
+          score,
+        }));
       });
 
     return {
@@ -321,6 +313,7 @@ ChunkRepository.Default = Layer.effect(
       getChunksByDocument,
       linkEntityChunk,
       getChunksForEntity,
+      getEntityIdsForChunks,
       searchVector,
       searchKeyword,
       searchHybrid,

@@ -11,6 +11,8 @@ import {
   type HybridSearchQuery,
   type KeywordSearchQuery,
   type NeighborhoodQuery,
+  type PathFindingQuery,
+  type PathFindingResult,
   type SearchResultItem,
   type VectorSearchQuery,
 } from "../domain/query.js";
@@ -76,6 +78,9 @@ export interface ChunkRepositoryShape {
   readonly getChunksForEntity: (
     entityId: string,
   ) => Effect.Effect<ReadonlyArray<DocumentChunk>, SqlError>;
+  readonly getEntityIdsForChunks: (
+    chunkIds: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<string>, SqlError>;
   readonly searchVector: (
     query: VectorSearchQuery,
   ) => Effect.Effect<ReadonlyArray<SearchResultItem>, SqlError>;
@@ -188,6 +193,9 @@ export interface GraphRepositoryShape {
     },
     SqlError
   >;
+  readonly findPaths: (
+    query: PathFindingQuery,
+  ) => Effect.Effect<PathFindingResult, SqlError>;
   readonly deleteEdge: (id: string) => Effect.Effect<boolean, SqlError>;
 }
 

@@ -12,6 +12,7 @@ import {
   EmbeddingService,
   EntityResolverService,
   ExtractionService,
+  GraphRAGService,
 } from "../pipeline/index.js";
 import {
   EmbeddingConfigValues,
@@ -70,11 +71,17 @@ export function makeAgentPipelineLayer(params: {
     Layer.provide(httpLayer),
   );
 
+  const graphRagLayer = GraphRAGService.Default.pipe(
+    Layer.provide(reposLayer),
+    Layer.provide(embeddingLayer),
+  );
+
   return Layer.mergeAll(
     reposLayer,
     resolverLayer,
     embeddingLayer,
     s3Layer,
+    graphRagLayer,
     ExtractionService.Default,
   );
 }

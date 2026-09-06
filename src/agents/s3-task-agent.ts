@@ -1,6 +1,6 @@
 import { Effect, Redacted, Ref, Schema } from "effect";
 import { defineAgent, method, Snapshot } from "@golemcloud/effect-golem";
-import { PgClient } from "@golemcloud/effect-golem/postgres";
+import { createPostgresClient } from "../storage/database-client.js";
 import { S3TaskStateSchema } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
@@ -21,10 +21,12 @@ export const S3IngestorTaskAgent = defineAgent({
   }),
   methods: {
     sync: method({
-      params: { force: Schema.optional(Schema.Boolean) },
+      params: {
+        force: Schema.optional(Schema.Boolean),
+      },
       success: S3TaskStateSchema,
       description:
-        "Executes an incremental or forced synchronization of the S3 resource",
+        "Executes full or incremental synchronization of the bound S3 resource",
     }),
     getStatus: method({
       params: {},
@@ -41,17 +43,7 @@ export const S3IngestorTaskAgent = defineAgent({
 }).implement(({ resourceName }, snapshot) =>
   Effect.gen(function* () {
     const config = yield* AppAgentConfig;
-    const host = yield* config.db.host;
-    const db = yield* config.db.db;
-    const port = yield* config.db.port;
-    const user = Redacted.value(yield* config.db.user.get);
-    const password = Redacted.value(yield* config.db.password.get);
-
-    const connectionAddress = `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
-    const sql = yield* PgClient.make({
-      connectionAddress,
-      decodeTemporal: "date",
-    });
+    const sql = yield* createPostgresClient(config);
 
     const api_base = yield* config.embedding.api_base;
     const model = yield* config.embedding.model;
