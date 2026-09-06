@@ -1,5 +1,5 @@
 import { Effect, Redacted, Schema } from "effect";
-import { defineAgent, method } from "@golemcloud/effect-golem";
+import { defineAgent, Http, method } from "@golemcloud/effect-golem";
 import { createPostgresClient } from "../storage/database-client.js";
 import {
   AnswerResponseSchema,
@@ -36,6 +36,7 @@ export const KnowledgeAccessAgent = defineAgent({
   mode: "ephemeral",
   config: AppAgentConfig,
   constructorParams: {},
+  http: Http.mount("/api/knowledge", { cors: ["*"] }),
   methods: {
     search: method({
       params: {
@@ -48,6 +49,7 @@ export const KnowledgeAccessAgent = defineAgent({
       success: SearchResponseSchema,
       description:
         "Performs hybrid, vector, or keyword search across ingested document chunks",
+      http: [Http.post("/search")],
     }),
     getNeighborhood: method({
       params: {
@@ -59,6 +61,7 @@ export const KnowledgeAccessAgent = defineAgent({
       success: NeighborhoodResponseSchema,
       description:
         "Traverses graph neighborhood up to maxDepth hops around target entity",
+      http: [Http.post("/neighborhood")],
     }),
     getEntity: method({
       params: {
@@ -66,6 +69,7 @@ export const KnowledgeAccessAgent = defineAgent({
       },
       success: Schema.NullOr(EntityResultSchema),
       description: "Finds an entity by exact ID",
+      http: [Http.get("/entities/{id}")],
     }),
     graphRag: method({
       params: {
@@ -78,6 +82,7 @@ export const KnowledgeAccessAgent = defineAgent({
       success: GraphRAGContextBundleSchema,
       description:
         "Executes GraphRAG retrieval pipeline returning structured context and formatted prompt",
+      http: [Http.post("/graphrag")],
     }),
     findPaths: method({
       params: {
@@ -92,6 +97,7 @@ export const KnowledgeAccessAgent = defineAgent({
       success: PathFindingResultSchema,
       description:
         "Discovers multi-hop relational paths between source and target entities",
+      http: [Http.post("/paths")],
     }),
     ask: method({
       params: {
@@ -103,12 +109,14 @@ export const KnowledgeAccessAgent = defineAgent({
       success: AnswerResponseSchema,
       description:
         "Answers natural language questions with GraphRAG context retrieval, synthesis, and source citations",
+      http: [Http.post("/ask")],
     }),
     getOverview: method({
       params: {},
       success: KnowledgeBaseOverviewSchema,
       description:
         "Returns statistical overview of the knowledge base (document count, chunk count, entity count, relationship count)",
+      http: [Http.get("/overview")],
     }),
   },
 }).implement(() =>

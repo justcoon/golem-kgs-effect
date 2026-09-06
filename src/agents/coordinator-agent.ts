@@ -1,5 +1,5 @@
 import { Effect, Ref, Schema } from "effect";
-import { defineAgent, method, Snapshot } from "@golemcloud/effect-golem";
+import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 import {
   calculateScheduledAt,
   CoordinatorStateSchema,
@@ -7,6 +7,8 @@ import {
   SyncScheduleSchema,
   TaskRunSummarySchema,
   toScheduleKey,
+  WebhookIngestPayloadSchema,
+  type SourceType,
   type SyncSchedule,
   type TaskRunSummary,
 } from "./types.js";
@@ -18,6 +20,7 @@ export const IngestionCoordinatorAgent = defineAgent({
     "Durable supervisor managing sync schedules and dispatching to worker agents across resource types",
   mode: "durable",
   constructorParams: {},
+  http: Http.mount("/api/coordinator", { cors: ["*"] }),
   snapshot: Snapshot.define({
     schema: CoordinatorStateSchema,
     policy: Snapshot.policy.everyN(5),
@@ -32,6 +35,7 @@ export const IngestionCoordinatorAgent = defineAgent({
       success: SyncScheduleSchema,
       description:
         "Registers or updates a recurring synchronization schedule for a typed resource",
+      http: [Http.post("/schedules")],
     }),
     triggerSync: method({
       params: {
@@ -42,6 +46,18 @@ export const IngestionCoordinatorAgent = defineAgent({
       success: TaskRunSummarySchema,
       description:
         "Immediately triggers synchronization on the worker agent for the given typed resource",
+      http: [Http.post("/sync")],
+    }),
+    ingestWebhook: method({
+      params: {
+        sourceType: SourceTypeSchema,
+        resourceName: Schema.String,
+        payload: WebhookIngestPayloadSchema,
+      },
+      success: TaskRunSummarySchema,
+      description:
+        "Stable push webhook endpoint for external event-driven ingestion",
+      http: [Http.post("/webhook/{sourceType}/{resourceName}")],
     }),
     scheduleNext: method({
       params: {
@@ -66,6 +82,7 @@ export const IngestionCoordinatorAgent = defineAgent({
       success: CoordinatorStateSchema,
       description:
         "Returns current coordinator state and all configured schedules",
+      http: [Http.get("/status")],
     }),
     pauseSchedule: method({
       params: {
@@ -74,6 +91,7 @@ export const IngestionCoordinatorAgent = defineAgent({
       },
       success: Schema.Boolean,
       description: "Pauses recurring schedule for a typed resource",
+      http: [Http.post("/schedules/pause")],
     }),
     resumeSchedule: method({
       params: {
@@ -82,6 +100,7 @@ export const IngestionCoordinatorAgent = defineAgent({
       },
       success: Schema.Boolean,
       description: "Resumes a paused recurring schedule for a typed resource",
+      http: [Http.post("/schedules/resume")],
     }),
   },
 }).implement((_params, snapshot) =>
@@ -96,6 +115,75 @@ export const IngestionCoordinatorAgent = defineAgent({
     });
 
     yield* Effect.logInfo("IngestionCoordinatorAgent initialized");
+
+    const doTriggerSync = (
+      sourceType: SourceType,
+      resourceName: string,
+      force?: boolean,
+    ) =>
+      Effect.gen(function* () {
+        const key = toScheduleKey(sourceType, resourceName);
+        let runSummary: TaskRunSummary;
+
+        if (sourceType === "s3") {
+          const worker = yield* S3IngestorTaskAgent.client.get({
+            resourceName,
+          });
+          const syncResult = yield* worker.sync({ force });
+          runSummary = {
+            sourceType: "s3",
+            resourceName,
+            status: syncResult.status === "COMPLETED" ? "COMPLETED" : "FAILED",
+            syncedCount: syncResult.metrics.totalSynced,
+            failedCount: syncResult.metrics.totalFailed,
+            durationMs: syncResult.metrics.lastDurationMs,
+            errorMessage: syncResult.errorMessage,
+          };
+        } else {
+          runSummary = {
+            sourceType,
+            resourceName,
+            status: "FAILED",
+            syncedCount: 0,
+            failedCount: 0,
+            durationMs: 0,
+            errorMessage: `Worker for source type '${sourceType}' is not implemented`,
+          };
+        }
+
+        const nowIso = new Date().toISOString();
+
+        yield* Ref.update(state, (s) => {
+          const existing = s.schedules[key];
+          const updatedSchedules = existing
+            ? {
+                ...s.schedules,
+                [key]: {
+                  ...existing,
+                  lastRunAt: nowIso,
+                },
+              }
+            : s.schedules;
+
+          return {
+            ...s,
+            schedules: updatedSchedules,
+            aggregatedMetrics: {
+              totalRunsTriggered: s.aggregatedMetrics.totalRunsTriggered + 1,
+              totalSuccesses:
+                runSummary.status === "COMPLETED"
+                  ? s.aggregatedMetrics.totalSuccesses + 1
+                  : s.aggregatedMetrics.totalSuccesses,
+              totalFailures:
+                runSummary.status === "FAILED"
+                  ? s.aggregatedMetrics.totalFailures + 1
+                  : s.aggregatedMetrics.totalFailures,
+            },
+          };
+        });
+
+        return runSummary;
+      });
 
     return {
       registerSchedule: ({ sourceType, resourceName, intervalSeconds }) =>
@@ -122,69 +210,14 @@ export const IngestionCoordinatorAgent = defineAgent({
         }),
 
       triggerSync: ({ sourceType, resourceName, force }) =>
+        doTriggerSync(sourceType, resourceName, force),
+
+      ingestWebhook: ({ sourceType, resourceName, payload }) =>
         Effect.gen(function* () {
-          const key = toScheduleKey(sourceType, resourceName);
-          let runSummary: TaskRunSummary;
-
-          if (sourceType === "s3") {
-            const worker = yield* S3IngestorTaskAgent.client.get({
-              resourceName,
-            });
-            const syncResult = yield* worker.sync({ force });
-            runSummary = {
-              sourceType: "s3",
-              resourceName,
-              status:
-                syncResult.status === "COMPLETED" ? "COMPLETED" : "FAILED",
-              syncedCount: syncResult.metrics.totalSynced,
-              failedCount: syncResult.metrics.totalFailed,
-              durationMs: syncResult.metrics.lastDurationMs,
-              errorMessage: syncResult.errorMessage,
-            };
-          } else {
-            runSummary = {
-              sourceType,
-              resourceName,
-              status: "FAILED",
-              syncedCount: 0,
-              failedCount: 0,
-              durationMs: 0,
-              errorMessage: `Worker for source type '${sourceType}' is not implemented`,
-            };
-          }
-
-          const nowIso = new Date().toISOString();
-
-          yield* Ref.update(state, (s) => {
-            const existing = s.schedules[key];
-            const updatedSchedules = existing
-              ? {
-                  ...s.schedules,
-                  [key]: {
-                    ...existing,
-                    lastRunAt: nowIso,
-                  },
-                }
-              : s.schedules;
-
-            return {
-              ...s,
-              schedules: updatedSchedules,
-              aggregatedMetrics: {
-                totalRunsTriggered: s.aggregatedMetrics.totalRunsTriggered + 1,
-                totalSuccesses:
-                  runSummary.status === "COMPLETED"
-                    ? s.aggregatedMetrics.totalSuccesses + 1
-                    : s.aggregatedMetrics.totalSuccesses,
-                totalFailures:
-                  runSummary.status === "FAILED"
-                    ? s.aggregatedMetrics.totalFailures + 1
-                    : s.aggregatedMetrics.totalFailures,
-              },
-            };
-          });
-
-          return runSummary;
+          yield* Effect.logInfo(
+            `Push webhook received for ${sourceType}:${resourceName} (action=${payload.action ?? "default"})`,
+          );
+          return yield* doTriggerSync(sourceType, resourceName, payload.force);
         }),
 
       scheduleNext: ({ sourceType, resourceName }) =>

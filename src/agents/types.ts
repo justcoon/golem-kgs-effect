@@ -226,6 +226,29 @@ export const KnowledgeBaseOverviewSchema = Schema.Struct({
 });
 export type KnowledgeBaseOverview = typeof KnowledgeBaseOverviewSchema.Type;
 
+// --- Webhook & Callback Schemas ---
+
+export const WebhookIngestPayloadSchema = Schema.Struct({
+  action: Schema.optional(Schema.String),
+  force: Schema.optional(Schema.Boolean),
+});
+export type WebhookIngestPayload = typeof WebhookIngestPayloadSchema.Type;
+
+export const BatchJobCallbackResultSchema = Schema.Struct({
+  jobId: Schema.String,
+  status: Schema.Literals(["COMPLETED", "FAILED"]),
+  processedItems: Schema.Number,
+  details: Schema.optional(Schema.String),
+});
+export type BatchJobCallbackResult = typeof BatchJobCallbackResultSchema.Type;
+
+export const OneShotWebhookHandleResponseSchema = Schema.Struct({
+  callbackUrl: Schema.String,
+  instructions: Schema.String,
+});
+export type OneShotWebhookHandleResponse =
+  typeof OneShotWebhookHandleResponseSchema.Type;
+
 // --- Helper Utilities ---
 
 /**

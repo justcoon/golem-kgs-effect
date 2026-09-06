@@ -1,7 +1,13 @@
 import { Effect, Redacted, Ref, Schema } from "effect";
-import { defineAgent, method, Snapshot } from "@golemcloud/effect-golem";
+import {
+  defineAgent,
+  Http,
+  method,
+  Snapshot,
+  Webhook,
+} from "@golemcloud/effect-golem";
 import { createPostgresClient } from "../storage/database-client.js";
-import { S3TaskStateSchema } from "./types.js";
+import { BatchJobCallbackResultSchema, S3TaskStateSchema } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
 import { runS3Ingestion } from "../pipeline/s3-ingestion-pipeline.js";
@@ -15,6 +21,7 @@ export const S3IngestorTaskAgent = defineAgent({
   constructorParams: {
     resourceName: Schema.String,
   },
+  http: Http.mount("/api/ingestion/{resourceName}", { cors: ["*"] }),
   snapshot: Snapshot.define({
     schema: S3TaskStateSchema,
     policy: Snapshot.policy.everyN(5),
@@ -27,17 +34,29 @@ export const S3IngestorTaskAgent = defineAgent({
       success: S3TaskStateSchema,
       description:
         "Executes full or incremental synchronization of the bound S3 resource",
+      http: [Http.post("/sync")],
     }),
     getStatus: method({
       params: {},
       success: S3TaskStateSchema,
       description: "Returns the current synchronization state and metrics",
+      http: [Http.get("/status")],
     }),
     resetCursor: method({
       params: {},
       success: S3TaskStateSchema,
       description:
         "Resets the sync cursor to force a full rescan on the next sync",
+      http: [Http.post("/reset")],
+    }),
+    awaitBatchJob: method({
+      params: {
+        jobId: Schema.optional(Schema.String),
+      },
+      success: BatchJobCallbackResultSchema,
+      description:
+        "Allocates a durable one-shot webhook handle and awaits external batch completion callback",
+      http: [Http.post("/batch-callback")],
     }),
   },
 }).implement(({ resourceName }, snapshot) =>
@@ -114,6 +133,16 @@ export const S3IngestorTaskAgent = defineAgent({
           status: "IDLE" as const,
           errorMessage: null,
         })),
+
+      awaitBatchJob: ({ jobId }) =>
+        Effect.gen(function* () {
+          const hook = yield* Webhook.create;
+          yield* Effect.logInfo(
+            `Allocated one-shot webhook for jobId=${jobId ?? "unspecified"}: ${hook.url}`,
+          );
+          const payload = yield* hook.await;
+          return yield* payload.decode(BatchJobCallbackResultSchema);
+        }).pipe(Effect.orDie),
     };
   }),
 );

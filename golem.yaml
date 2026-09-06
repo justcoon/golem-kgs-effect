@@ -60,4 +60,6 @@ httpApi:
     local:
       - domain: golem-kgs-effect.localhost:9006
         agents:
-          Counter: {}
+          KnowledgeAccessAgent: {}
+          IngestionCoordinatorAgent: {}
+          S3IngestorTaskAgent: {}
