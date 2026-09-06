@@ -21,6 +21,9 @@ secretDefaults:
           endpoint: "{{ S3_ENDPOINT_URL }}"
           region: "{{ AWS_DEFAULT_REGION }}"
           bucket: "golem-documents"
+          prefixes:
+            - "rfcs/"
+            - "specs/"
           accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
           secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
         legal:
@@ -33,6 +36,8 @@ secretDefaults:
           endpoint: "{{ S3_ENDPOINT_URL }}"
           region: "{{ AWS_DEFAULT_REGION }}"
           bucket: "technical-docs"
+          prefixes:
+            - "architecture/"
           accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
           secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
 

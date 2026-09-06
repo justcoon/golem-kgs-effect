@@ -1,6 +1,5 @@
-import { Context, Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { type SqlError } from "effect/unstable/sql/SqlError";
 import { Pg } from "@golemcloud/effect-golem/postgres";
 import {
   type SaveCheckpointInput,
@@ -32,38 +31,24 @@ const mapCheckpointRow = (row: CheckpointRow): SyncCheckpoint => ({
   updatedAt: new Date(row.updated_at),
 });
 
-export interface CheckpointRepositoryShape {
-  readonly saveCheckpoint: (
-    input: SaveCheckpointInput,
-  ) => Effect.Effect<SyncCheckpoint, SqlError>;
-  readonly getCheckpoint: (
-    connectorId: string,
-  ) => Effect.Effect<Option.Option<SyncCheckpoint>, SqlError>;
-  readonly listCheckpoints: () => Effect.Effect<
-    ReadonlyArray<SyncCheckpoint>,
-    SqlError
-  >;
-  readonly deleteCheckpoint: (
-    connectorId: string,
-  ) => Effect.Effect<boolean, SqlError>;
-}
-
-export class CheckpointRepository extends Context.Service<
+import {
   CheckpointRepository,
-  CheckpointRepositoryShape
->()("app/storage/CheckpointRepository") {
-  static readonly Default = Layer.effect(
-    CheckpointRepository,
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
+  type CheckpointRepositoryShape,
+} from "./repository-tags.js";
+export { CheckpointRepository, type CheckpointRepositoryShape };
 
-      const saveCheckpoint = (input: SaveCheckpointInput) =>
-        Effect.gen(function* () {
-          const cursor = Pg.jsonb(input.cursorData);
-          const status = input.status ?? "IDLE";
-          const metrics = Pg.jsonb(input.metrics ?? {});
+CheckpointRepository.Default = Layer.effect(
+  CheckpointRepository,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
 
-          const rows = (yield* sql<CheckpointRow>`
+    const saveCheckpoint = (input: SaveCheckpointInput) =>
+      Effect.gen(function* () {
+        const cursor = Pg.jsonb(input.cursorData);
+        const status = input.status ?? "IDLE";
+        const metrics = Pg.jsonb(input.metrics ?? {});
+
+        const rows = (yield* sql<CheckpointRow>`
             INSERT INTO sync_checkpoints (connector_id, cursor_data, last_sync_time, status, metrics, updated_at)
             VALUES (${input.connectorId}, ${cursor}, NOW(), ${status}, ${metrics}, NOW())
             ON CONFLICT (connector_id) DO UPDATE SET
@@ -75,54 +60,51 @@ export class CheckpointRepository extends Context.Service<
             RETURNING connector_id, cursor_data, last_sync_time, status, metrics, updated_at
           `) as ReadonlyArray<CheckpointRow>;
 
-          const row = rows[0];
-          if (!row) {
-            return yield* Effect.die(
-              new Error("Failed to save sync checkpoint"),
-            );
-          }
-          return mapCheckpointRow(row);
-        });
+        const row = rows[0];
+        if (!row) {
+          return yield* Effect.die(new Error("Failed to save sync checkpoint"));
+        }
+        return mapCheckpointRow(row);
+      });
 
-      const getCheckpoint = (connectorId: string) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<CheckpointRow>`
+    const getCheckpoint = (connectorId: string) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<CheckpointRow>`
             SELECT connector_id, cursor_data, last_sync_time, status, metrics, updated_at
             FROM sync_checkpoints
             WHERE connector_id = ${connectorId}
             LIMIT 1
           `) as ReadonlyArray<CheckpointRow>;
 
-          const row = rows[0];
-          return row ? Option.some(mapCheckpointRow(row)) : Option.none();
-        });
+        const row = rows[0];
+        return row ? Option.some(mapCheckpointRow(row)) : Option.none();
+      });
 
-      const listCheckpoints = () =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<CheckpointRow>`
+    const listCheckpoints = () =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<CheckpointRow>`
             SELECT connector_id, cursor_data, last_sync_time, status, metrics, updated_at
             FROM sync_checkpoints
             ORDER BY last_sync_time DESC
           `) as ReadonlyArray<CheckpointRow>;
 
-          return rows.map(mapCheckpointRow);
-        });
+        return rows.map(mapCheckpointRow);
+      });
 
-      const deleteCheckpoint = (connectorId: string) =>
-        Effect.gen(function* () {
-          const affected = (yield* sql`
+    const deleteCheckpoint = (connectorId: string) =>
+      Effect.gen(function* () {
+        const affected = (yield* sql`
             DELETE FROM sync_checkpoints WHERE connector_id = ${connectorId}
           `.raw) as bigint | number;
 
-          return Number(affected) > 0;
-        });
+        return Number(affected) > 0;
+      });
 
-      return {
-        saveCheckpoint,
-        getCheckpoint,
-        listCheckpoints,
-        deleteCheckpoint,
-      };
-    }),
-  );
-}
+    return {
+      saveCheckpoint,
+      getCheckpoint,
+      listCheckpoints,
+      deleteCheckpoint,
+    };
+  }),
+);

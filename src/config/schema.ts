@@ -39,6 +39,7 @@ export const S3ResourceTargetSchema = Schema.Struct({
   endpoint: Schema.String,
   region: Schema.String,
   bucket: Schema.String,
+  prefixes: Schema.optional(Schema.Array(Schema.String)),
   accessKeyId: Schema.String,
   secretAccessKey: Schema.String,
 });

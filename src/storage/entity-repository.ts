@@ -1,6 +1,5 @@
-import { Context, Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { type SqlError } from "effect/unstable/sql/SqlError";
 import { Pg } from "@golemcloud/effect-golem/postgres";
 import {
   type CreateEntityInput,
@@ -54,74 +53,46 @@ const mapAliasRow = (row: AliasRow): EntityAlias => ({
   createdAt: new Date(row.created_at),
 });
 
-export interface EntityRepositoryShape {
-  readonly findById: (
-    id: string,
-  ) => Effect.Effect<Option.Option<Entity>, SqlError>;
-  readonly findByName: (
-    name: string,
-  ) => Effect.Effect<Option.Option<Entity>, SqlError>;
-  readonly findByAlias: (
-    alias: string,
-  ) => Effect.Effect<Option.Option<Entity>, SqlError>;
-  readonly upsertEntity: (
-    input: CreateEntityInput,
-  ) => Effect.Effect<Entity, SqlError>;
-  readonly updateEntity: (
-    id: string,
-    input: UpdateEntityInput,
-  ) => Effect.Effect<Option.Option<Entity>, SqlError>;
-  readonly addAlias: (
-    alias: EntityAlias,
-  ) => Effect.Effect<EntityAlias, SqlError>;
-  readonly listAliases: (
-    entityId: string,
-  ) => Effect.Effect<ReadonlyArray<EntityAlias>, SqlError>;
-  readonly searchByName: (
-    query: string,
-    limit?: number,
-  ) => Effect.Effect<ReadonlyArray<Entity>, SqlError>;
-  readonly deleteEntity: (id: string) => Effect.Effect<boolean, SqlError>;
-}
-
-export class EntityRepository extends Context.Service<
+import {
   EntityRepository,
-  EntityRepositoryShape
->()("app/storage/EntityRepository") {
-  static readonly Default = Layer.effect(
-    EntityRepository,
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
+  type EntityRepositoryShape,
+} from "./repository-tags.js";
+export { EntityRepository, type EntityRepositoryShape };
 
-      const findById = (id: string) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<EntityRow>`
+EntityRepository.Default = Layer.effect(
+  EntityRepository,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    const findById = (id: string) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE id = ${id}
             LIMIT 1
           `) as ReadonlyArray<EntityRow>;
 
-          const row = rows[0];
-          return row ? Option.some(mapEntityRow(row)) : Option.none();
-        });
+        const row = rows[0];
+        return row ? Option.some(mapEntityRow(row)) : Option.none();
+      });
 
-      const findByName = (name: string) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<EntityRow>`
+    const findByName = (name: string) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE name = ${name}
             LIMIT 1
           `) as ReadonlyArray<EntityRow>;
 
-          const row = rows[0];
-          return row ? Option.some(mapEntityRow(row)) : Option.none();
-        });
+        const row = rows[0];
+        return row ? Option.some(mapEntityRow(row)) : Option.none();
+      });
 
-      const findByAlias = (alias: string) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<EntityRow>`
+    const findByAlias = (alias: string) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<EntityRow>`
             SELECT e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
             FROM entity_aliases a
             JOIN entities e ON a.entity_id = e.id
@@ -130,17 +101,17 @@ export class EntityRepository extends Context.Service<
             LIMIT 1
           `) as ReadonlyArray<EntityRow>;
 
-          const row = rows[0];
-          return row ? Option.some(mapEntityRow(row)) : Option.none();
-        });
+        const row = rows[0];
+        return row ? Option.some(mapEntityRow(row)) : Option.none();
+      });
 
-      const upsertEntity = (input: CreateEntityInput) =>
-        Effect.gen(function* () {
-          const props = Pg.jsonb(input.properties ?? {});
-          const meta = Pg.jsonb(input.metadata ?? {});
-          const desc = input.description ?? null;
+    const upsertEntity = (input: CreateEntityInput) =>
+      Effect.gen(function* () {
+        const props = Pg.jsonb(input.properties ?? {});
+        const meta = Pg.jsonb(input.metadata ?? {});
+        const desc = input.description ?? null;
 
-          const rows = (yield* sql<EntityRow>`
+        const rows = (yield* sql<EntityRow>`
             INSERT INTO entities (id, name, entity_type, description, properties, metadata, updated_at)
             VALUES (${input.id}, ${input.name}, ${input.entityType}, ${desc}, ${props}, ${meta}, NOW())
             ON CONFLICT (id) DO UPDATE SET
@@ -153,39 +124,39 @@ export class EntityRepository extends Context.Service<
             RETURNING id, name, entity_type, description, properties, metadata, created_at, updated_at
           `) as ReadonlyArray<EntityRow>;
 
-          const row = rows[0];
-          if (!row) {
-            return yield* Effect.die(
-              new Error("Failed to insert or update entity"),
-            );
-          }
-          return mapEntityRow(row);
+        const row = rows[0];
+        if (!row) {
+          return yield* Effect.die(
+            new Error("Failed to insert or update entity"),
+          );
+        }
+        return mapEntityRow(row);
+      });
+
+    const updateEntity = (id: string, input: UpdateEntityInput) =>
+      Effect.gen(function* () {
+        const existingOpt = yield* findById(id);
+        if (Option.isNone(existingOpt)) {
+          return Option.none();
+        }
+
+        const existing = existingOpt.value;
+        const name = input.name ?? existing.name;
+        const entityType = input.entityType ?? existing.entityType;
+        const desc =
+          input.description !== undefined
+            ? input.description
+            : existing.description;
+        const props = Pg.jsonb({
+          ...existing.properties,
+          ...(input.properties ?? {}),
+        });
+        const meta = Pg.jsonb({
+          ...existing.metadata,
+          ...(input.metadata ?? {}),
         });
 
-      const updateEntity = (id: string, input: UpdateEntityInput) =>
-        Effect.gen(function* () {
-          const existingOpt = yield* findById(id);
-          if (Option.isNone(existingOpt)) {
-            return Option.none();
-          }
-
-          const existing = existingOpt.value;
-          const name = input.name ?? existing.name;
-          const entityType = input.entityType ?? existing.entityType;
-          const desc =
-            input.description !== undefined
-              ? input.description
-              : existing.description;
-          const props = Pg.jsonb({
-            ...existing.properties,
-            ...(input.properties ?? {}),
-          });
-          const meta = Pg.jsonb({
-            ...existing.metadata,
-            ...(input.metadata ?? {}),
-          });
-
-          const rows = (yield* sql<EntityRow>`
+        const rows = (yield* sql<EntityRow>`
             UPDATE entities
             SET name = ${name},
                 entity_type = ${entityType},
@@ -197,13 +168,13 @@ export class EntityRepository extends Context.Service<
             RETURNING id, name, entity_type, description, properties, metadata, created_at, updated_at
           `) as ReadonlyArray<EntityRow>;
 
-          const row = rows[0];
-          return row ? Option.some(mapEntityRow(row)) : Option.none();
-        });
+        const row = rows[0];
+        return row ? Option.some(mapEntityRow(row)) : Option.none();
+      });
 
-      const addAlias = (alias: EntityAlias) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<AliasRow>`
+    const addAlias = (alias: EntityAlias) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<AliasRow>`
             INSERT INTO entity_aliases (alias, entity_id, source, confidence, created_at)
             VALUES (${alias.alias}, ${alias.entityId}, ${alias.source ?? "extracted"}, ${alias.confidence ?? 1.0}, NOW())
             ON CONFLICT (alias, entity_id) DO UPDATE SET
@@ -212,30 +183,28 @@ export class EntityRepository extends Context.Service<
             RETURNING alias, entity_id, source, confidence, created_at
           `) as ReadonlyArray<AliasRow>;
 
-          const row = rows[0];
-          if (!row) {
-            return yield* Effect.die(
-              new Error("Failed to insert entity alias"),
-            );
-          }
-          return mapAliasRow(row);
-        });
+        const row = rows[0];
+        if (!row) {
+          return yield* Effect.die(new Error("Failed to insert entity alias"));
+        }
+        return mapAliasRow(row);
+      });
 
-      const listAliases = (entityId: string) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<AliasRow>`
+    const listAliases = (entityId: string) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<AliasRow>`
             SELECT alias, entity_id, source, confidence, created_at
             FROM entity_aliases
             WHERE entity_id = ${entityId}
             ORDER BY confidence DESC
           `) as ReadonlyArray<AliasRow>;
 
-          return rows.map(mapAliasRow);
-        });
+        return rows.map(mapAliasRow);
+      });
 
-      const searchByName = (query: string, limit = 20) =>
-        Effect.gen(function* () {
-          const rows = (yield* sql<EntityRow>`
+    const searchByName = (query: string, limit = 20) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE name ILIKE ${`%${query}%`}
@@ -244,29 +213,28 @@ export class EntityRepository extends Context.Service<
             LIMIT ${limit}
           `) as ReadonlyArray<EntityRow>;
 
-          return rows.map(mapEntityRow);
-        });
+        return rows.map(mapEntityRow);
+      });
 
-      const deleteEntity = (id: string) =>
-        Effect.gen(function* () {
-          const affected = (yield* sql`
+    const deleteEntity = (id: string) =>
+      Effect.gen(function* () {
+        const affected = (yield* sql`
             DELETE FROM entities WHERE id = ${id}
           `.raw) as bigint | number;
 
-          return Number(affected) > 0;
-        });
+        return Number(affected) > 0;
+      });
 
-      return {
-        findById,
-        findByName,
-        findByAlias,
-        upsertEntity,
-        updateEntity,
-        addAlias,
-        listAliases,
-        searchByName,
-        deleteEntity,
-      };
-    }),
-  );
-}
+    return {
+      findById,
+      findByName,
+      findByAlias,
+      upsertEntity,
+      updateEntity,
+      addAlias,
+      listAliases,
+      searchByName,
+      deleteEntity,
+    };
+  }),
+);

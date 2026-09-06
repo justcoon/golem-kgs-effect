@@ -6,8 +6,10 @@ import {
   type EntityAlias,
 } from "../domain/entity.js";
 import { type Edge } from "../domain/relationship.js";
-import { EntityRepository } from "../storage/entity-repository.js";
-import { GraphRepository } from "../storage/graph-repository.js";
+import {
+  EntityRepository,
+  GraphRepository,
+} from "../storage/repository-tags.js";
 import { type ExtractedKnowledge } from "./extractor.js";
 
 export interface FusionResult {
