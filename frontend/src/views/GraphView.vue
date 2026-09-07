@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { ApiService } from '../services/api';
 import GraphCanvas from '../components/GraphCanvas.vue';
-import type { EdgeResult, PathFindingResult } from '../types/api';
+import type { EdgeResult, EntityResult, PathFindingResult } from '../types/api';
 
 const props = defineProps<{
   initialEntityId?: string | null;
@@ -20,9 +20,72 @@ const maxDepth = ref(2);
 const minConfidence = ref<number | undefined>(undefined);
 const neighborhoodLoading = ref(false);
 const neighborhoodError = ref<string | null>(null);
-const graphEntities = ref<string[]>([]);
+const graphEntities = ref<EntityResult[]>([]);
 const graphEdges = ref<EdgeResult[]>([]);
 const activeCenterId = ref<string | undefined>(undefined);
+
+// Entity lookup map
+const entityMap = computed(() => new Map<string, EntityResult>(graphEntities.value.map(e => [e.id, e])));
+
+// Autocomplete state
+const targetSuggestions = ref<EntityResult[]>([]);
+const sourceSuggestions = ref<EntityResult[]>([]);
+const destSuggestions = ref<EntityResult[]>([]);
+const showTargetSuggestions = ref(false);
+const showSourceSuggestions = ref(false);
+const showDestSuggestions = ref(false);
+
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onInputSearch(field: 'target' | 'source' | 'dest') {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(async () => {
+    const q = (
+      field === 'target'
+        ? targetEntityId.value
+        : field === 'source'
+          ? sourceEntityId.value
+          : destEntityId.value
+    ).trim();
+
+    if (q.length < 2) {
+      if (field === 'target') targetSuggestions.value = [];
+      if (field === 'source') sourceSuggestions.value = [];
+      if (field === 'dest') destSuggestions.value = [];
+      return;
+    }
+
+    try {
+      const results = await ApiService.searchEntities(q, 6);
+      if (field === 'target') {
+        targetSuggestions.value = results;
+        showTargetSuggestions.value = results.length > 0;
+      } else if (field === 'source') {
+        sourceSuggestions.value = results;
+        showSourceSuggestions.value = results.length > 0;
+      } else {
+        destSuggestions.value = results;
+        showDestSuggestions.value = results.length > 0;
+      }
+    } catch {
+      // ignore
+    }
+  }, 250);
+}
+
+function selectSuggestion(field: 'target' | 'source' | 'dest', entity: EntityResult) {
+  if (field === 'target') {
+    targetEntityId.value = entity.name;
+    showTargetSuggestions.value = false;
+    handleExploreNeighborhood(entity.id);
+  } else if (field === 'source') {
+    sourceEntityId.value = entity.name;
+    showSourceSuggestions.value = false;
+  } else {
+    destEntityId.value = entity.name;
+    showDestSuggestions.value = false;
+  }
+}
 
 // Path finding state
 const sourceEntityId = ref('');
@@ -33,15 +96,74 @@ const pathLoading = ref(false);
 const pathError = ref<string | null>(null);
 const pathResults = ref<PathFindingResult | null>(null);
 
-const sampleEntities = [
-  'Golem Cloud',
-  'Effect-TS',
-  'PostgreSQL',
-  'pgvector',
-  'WebAssembly',
-  'QuickJS',
-  'GraphRAG',
-];
+// Quick select top connected entities (hubs)
+const quickSelectEntities = ref<EntityResult[]>([]);
+const quickSelectLoading = ref(false);
+
+async function loadQuickSelectEntities() {
+  quickSelectLoading.value = true;
+  try {
+    const hubs = await ApiService.getTopEntities(8);
+    quickSelectEntities.value = hubs;
+  } catch {
+    quickSelectEntities.value = [];
+  } finally {
+    quickSelectLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  loadQuickSelectEntities();
+});
+
+function onFocusSearch(field: 'target' | 'source' | 'dest') {
+  const currentVal = (
+    field === 'target'
+      ? targetEntityId.value
+      : field === 'source'
+        ? sourceEntityId.value
+        : destEntityId.value
+  ).trim();
+
+  if (currentVal.length === 0 && quickSelectEntities.value.length > 0) {
+    if (field === 'target') {
+      targetSuggestions.value = quickSelectEntities.value.slice(0, 6);
+      showTargetSuggestions.value = true;
+    } else if (field === 'source') {
+      sourceSuggestions.value = quickSelectEntities.value.slice(0, 6);
+      showSourceSuggestions.value = true;
+    } else {
+      destSuggestions.value = quickSelectEntities.value.slice(0, 6);
+      showDestSuggestions.value = true;
+    }
+  } else if (
+    (field === 'target' && targetSuggestions.value.length > 0) ||
+    (field === 'source' && sourceSuggestions.value.length > 0) ||
+    (field === 'dest' && destSuggestions.value.length > 0)
+  ) {
+    if (field === 'target') showTargetSuggestions.value = true;
+    if (field === 'source') showSourceSuggestions.value = true;
+    if (field === 'dest') showDestSuggestions.value = true;
+  }
+}
+
+function onBlurSearch(field: 'target' | 'source' | 'dest') {
+  setTimeout(() => {
+    if (field === 'target') showTargetSuggestions.value = false;
+    if (field === 'source') showSourceSuggestions.value = false;
+    if (field === 'dest') showDestSuggestions.value = false;
+  }, 200);
+}
+
+function handleQuickSelectPath(name: string) {
+  if (!sourceEntityId.value.trim()) {
+    sourceEntityId.value = name;
+  } else if (!destEntityId.value.trim()) {
+    destEntityId.value = name;
+  } else {
+    destEntityId.value = name;
+  }
+}
 
 async function handleExploreNeighborhood(entityToExplore?: string) {
   const id = (entityToExplore || targetEntityId.value).trim();
@@ -56,7 +178,7 @@ async function handleExploreNeighborhood(entityToExplore?: string) {
       maxDepth: maxDepth.value,
       minConfidence: minConfidence.value,
     });
-    graphEntities.value = res.entityIds;
+    graphEntities.value = res.entities || [];
     graphEdges.value = res.edges;
     activeCenterId.value = id;
   } catch (err: any) {
@@ -83,12 +205,10 @@ async function handleFindPaths() {
     pathResults.value = res;
 
     // Build unified graph representation for all path nodes & edges
-    const allNodeIds = new Set<string>();
     const allEdges: EdgeResult[] = [];
     const edgeKeySet = new Set<string>();
 
     res.paths.forEach(p => {
-      p.entityIds.forEach(id => allNodeIds.add(id));
       p.edges.forEach(e => {
         const k = `${e.sourceId}->${e.relationType}->${e.targetId}`;
         if (!edgeKeySet.has(k)) {
@@ -98,7 +218,7 @@ async function handleFindPaths() {
       });
     });
 
-    graphEntities.value = Array.from(allNodeIds);
+    graphEntities.value = res.entities || [];
     graphEdges.value = allEdges;
     activeCenterId.value = src;
   } catch (err: any) {
@@ -147,13 +267,32 @@ watch(() => props.initialEntityId, (newId) => {
     <!-- Neighborhood Controls -->
     <div v-if="mode === 'neighborhood'" class="controls-card glass">
       <div class="query-row">
-        <input
-          v-model="targetEntityId"
-          type="text"
-          placeholder="Enter entity name or ID (e.g. 'Effect-TS')..."
-          class="entity-input"
-          @keyup.enter="handleExploreNeighborhood()"
-        />
+        <div class="autocomplete-wrapper">
+          <input
+            v-model="targetEntityId"
+            type="text"
+            placeholder="Enter entity name or ID (e.g. 'PostgreSQL')..."
+            class="entity-input"
+            @input="onInputSearch('target')"
+            @focus="onFocusSearch('target')"
+            @blur="onBlurSearch('target')"
+            @keyup.enter="handleExploreNeighborhood()"
+          />
+          <div v-if="showTargetSuggestions && targetSuggestions.length > 0" class="suggestions-dropdown glass">
+            <div
+              v-for="item in targetSuggestions"
+              :key="item.id"
+              class="suggestion-item"
+              @mousedown.prevent="selectSuggestion('target', item)"
+            >
+              <div class="suggestion-main">
+                <span class="suggestion-name">{{ item.name }}</span>
+                <span class="type-pill" :class="item.entityType.toLowerCase()">{{ item.entityType }}</span>
+              </div>
+              <div v-if="item.description" class="suggestion-desc">{{ item.description }}</div>
+            </div>
+          </div>
+        </div>
         <button
           class="explore-btn"
           :disabled="neighborhoodLoading || !targetEntityId.trim()"
@@ -175,15 +314,22 @@ watch(() => props.initialEntityId, (newId) => {
         </div>
 
         <div class="sample-chips">
-          <span class="chip-label">Quick select:</span>
-          <button
-            v-for="s in sampleEntities"
-            :key="s"
-            class="chip-btn"
-            @click="handleExploreNeighborhood(s)"
-          >
-            {{ s }}
-          </button>
+          <span class="chip-label">Top Hubs:</span>
+          <span v-if="quickSelectLoading" class="chip-loading">Loading hubs...</span>
+          <template v-else-if="quickSelectEntities.length > 0">
+            <button
+              v-for="entity in quickSelectEntities"
+              :key="entity.id"
+              class="chip-btn"
+              :class="entity.entityType.toLowerCase()"
+              :title="`${entity.name} (${entity.entityType})`"
+              @click="handleExploreNeighborhood(entity.name)"
+            >
+              <span class="chip-dot"></span>
+              {{ entity.name }}
+            </button>
+          </template>
+          <span v-else class="chip-empty">No entities indexed yet</span>
         </div>
       </div>
     </div>
@@ -193,22 +339,60 @@ watch(() => props.initialEntityId, (newId) => {
       <div class="path-inputs-row">
         <div class="input-field">
           <label>Source Entity</label>
-          <input
-            v-model="sourceEntityId"
-            type="text"
-            placeholder="Starting entity..."
-            class="entity-input"
-          />
+          <div class="autocomplete-wrapper">
+            <input
+              v-model="sourceEntityId"
+              type="text"
+              placeholder="Starting entity..."
+              class="entity-input"
+              @input="onInputSearch('source')"
+              @focus="onFocusSearch('source')"
+              @blur="onBlurSearch('source')"
+            />
+            <div v-if="showSourceSuggestions && sourceSuggestions.length > 0" class="suggestions-dropdown glass">
+              <div
+                v-for="item in sourceSuggestions"
+                :key="item.id"
+                class="suggestion-item"
+                @mousedown.prevent="selectSuggestion('source', item)"
+              >
+                <div class="suggestion-main">
+                  <span class="suggestion-name">{{ item.name }}</span>
+                  <span class="type-pill" :class="item.entityType.toLowerCase()">{{ item.entityType }}</span>
+                </div>
+                <div v-if="item.description" class="suggestion-desc">{{ item.description }}</div>
+              </div>
+            </div>
+          </div>
         </div>
         <span class="arrow-indicator">➔</span>
         <div class="input-field">
           <label>Target Entity</label>
-          <input
-            v-model="destEntityId"
-            type="text"
-            placeholder="Destination entity..."
-            class="entity-input"
-          />
+          <div class="autocomplete-wrapper">
+            <input
+              v-model="destEntityId"
+              type="text"
+              placeholder="Destination entity..."
+              class="entity-input"
+              @input="onInputSearch('dest')"
+              @focus="onFocusSearch('dest')"
+              @blur="onBlurSearch('dest')"
+            />
+            <div v-if="showDestSuggestions && destSuggestions.length > 0" class="suggestions-dropdown glass">
+              <div
+                v-for="item in destSuggestions"
+                :key="item.id"
+                class="suggestion-item"
+                @mousedown.prevent="selectSuggestion('dest', item)"
+              >
+                <div class="suggestion-main">
+                  <span class="suggestion-name">{{ item.name }}</span>
+                  <span class="type-pill" :class="item.entityType.toLowerCase()">{{ item.entityType }}</span>
+                </div>
+                <div v-if="item.description" class="suggestion-desc">{{ item.description }}</div>
+              </div>
+            </div>
+          </div>
         </div>
         <button
           class="explore-btn"
@@ -238,6 +422,21 @@ watch(() => props.initialEntityId, (newId) => {
             <option value="INBOUND">Inbound Only</option>
           </select>
         </div>
+
+        <div v-if="quickSelectEntities.length > 0" class="sample-chips">
+          <span class="chip-label">Quick select:</span>
+          <button
+            v-for="entity in quickSelectEntities"
+            :key="entity.id"
+            class="chip-btn"
+            :class="entity.entityType.toLowerCase()"
+            :title="`Click to fill: ${entity.name}`"
+            @click="handleQuickSelectPath(entity.name)"
+          >
+            <span class="chip-dot"></span>
+            {{ entity.name }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -259,13 +458,13 @@ watch(() => props.initialEntityId, (newId) => {
           Relationships: <strong>{{ graphEdges.length }}</strong>
         </span>
         <span v-if="activeCenterId" class="stat-pill highlight">
-          Focus: <strong>{{ activeCenterId }}</strong>
+          Focus: <strong>{{ entityMap.get(activeCenterId)?.name || activeCenterId }}</strong>
         </span>
         <span class="hint-text">Tip: Drag nodes to arrange, scroll to zoom, click node to inspect.</span>
       </div>
 
       <GraphCanvas
-        :entity-ids="graphEntities"
+        :entities="graphEntities"
         :edges="graphEdges"
         :center-entity-id="activeCenterId"
         :height="520"
@@ -296,7 +495,7 @@ watch(() => props.initialEntityId, (newId) => {
           <div class="path-chain">
             <template v-for="(entityId, eIdx) in path.entityIds" :key="eIdx">
               <button class="node-chip" @click="emit('inspect-entity', entityId)">
-                {{ entityId }}
+                {{ entityMap.get(entityId)?.name || entityId }}
               </button>
               <span v-if="eIdx < path.edges.length" class="edge-segment">
                 <span class="edge-rel-text">{{ path.edges[eIdx].relationType }}</span>
@@ -326,7 +525,7 @@ watch(() => props.initialEntityId, (newId) => {
             <tr v-for="edge in graphEdges" :key="edge.id">
               <td>
                 <button class="table-link-btn" @click="emit('inspect-entity', edge.sourceId)">
-                  {{ edge.sourceId }}
+                  {{ entityMap.get(edge.sourceId)?.name || edge.sourceId }}
                 </button>
               </td>
               <td>
@@ -334,7 +533,7 @@ watch(() => props.initialEntityId, (newId) => {
               </td>
               <td>
                 <button class="table-link-btn" @click="emit('inspect-entity', edge.targetId)">
-                  {{ edge.targetId }}
+                  {{ entityMap.get(edge.targetId)?.name || edge.targetId }}
                 </button>
               </td>
               <td>{{ (edge.confidence * 100).toFixed(0) }}%</td>
@@ -419,6 +618,98 @@ watch(() => props.initialEntityId, (newId) => {
   border-color: var(--primary);
 }
 
+.autocomplete-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+.autocomplete-wrapper .entity-input {
+  width: 100%;
+}
+
+.suggestions-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 10px;
+  overflow: hidden;
+  z-index: 100;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.suggestion-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.15s ease;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-item:hover {
+  background: rgba(139, 92, 246, 0.15);
+}
+
+.suggestion-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.suggestion-name {
+  font-weight: 600;
+  color: var(--text-main);
+  font-size: 0.9rem;
+}
+
+.suggestion-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.type-pill {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: rgba(100, 116, 139, 0.2);
+  color: #94a3b8;
+}
+
+.type-pill.technology {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.type-pill.concept {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+}
+
+.type-pill.document {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+.type-pill.organization {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
 .explore-btn {
   background: linear-gradient(135deg, #8b5cf6, #3b82f6);
   border: none;
@@ -481,6 +772,9 @@ watch(() => props.initialEntityId, (newId) => {
 }
 
 .chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
@@ -489,6 +783,28 @@ watch(() => props.initialEntityId, (newId) => {
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
+}
+
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #94a3b8;
+  flex-shrink: 0;
+}
+
+.chip-btn.technology .chip-dot { background: #60a5fa; }
+.chip-btn.concept .chip-dot { background: #c084fc; }
+.chip-btn.organization .chip-dot { background: #34d399; }
+.chip-btn.person .chip-dot { background: #f472b6; }
+.chip-btn.document .chip-dot { background: #fbbf24; }
+.chip-btn.location .chip-dot { background: #f87171; }
+
+.chip-loading,
+.chip-empty {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .chip-btn:hover {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
-import type { EdgeResult } from '../types/api';
+import type { EdgeResult, EntityResult } from '../types/api';
 
 interface GraphNode {
   id: string;
@@ -21,7 +21,8 @@ interface GraphLink {
 }
 
 const props = defineProps<{
-  entityIds: string[];
+  entities?: EntityResult[];
+  entityIds?: string[];
   edges: EdgeResult[];
   centerEntityId?: string;
   height?: number;
@@ -52,11 +53,23 @@ const hoveredEdge = ref<EdgeResult | null>(null);
 let animationFrameId: number | null = null;
 
 // Color mapping by entity id/type
-function getNodeColor(id: string, isCenter?: boolean): string {
+function getNodeColor(node: GraphNode, isCenter?: boolean): string {
   if (isCenter) return '#8b5cf6'; // Violet glow for central node
-  const hash = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  if (node.type) {
+    const typeColors: Record<string, string> = {
+      TECHNOLOGY: '#3b82f6',
+      CONCEPT: '#a855f7',
+      DOCUMENT: '#10b981',
+      ORGANIZATION: '#f59e0b',
+      PERSON: '#ec4899',
+    };
+    if (typeColors[node.type.toUpperCase()]) {
+      return typeColors[node.type.toUpperCase()]!;
+    }
+  }
+  const hash = node.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const palette = ['#06b6d4', '#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#14b8a6'];
-  return palette[hash % palette.length];
+  return palette[hash % palette.length]!;
 }
 
 function initGraph() {
@@ -64,18 +77,28 @@ function initGraph() {
   const height = props.height || 500;
   const centerId = props.centerEntityId;
 
+  const entityLookup = new Map<string, EntityResult>(
+    (props.entities || []).map(e => [e.id, e])
+  );
+
   // Initialize nodes
   const nodeMap = new Map<string, GraphNode>();
-  const idList = Array.from(new Set([...props.entityIds, ...props.edges.map(e => e.sourceId), ...props.edges.map(e => e.targetId)]));
+  const directIds = props.entities ? props.entities.map(e => e.id) : (props.entityIds || []);
+  const idList = Array.from(new Set([...directIds, ...props.edges.map(e => e.sourceId), ...props.edges.map(e => e.targetId)]));
 
   idList.forEach((id, index) => {
     const isCenter = id === centerId;
+    const entity = entityLookup.get(id);
+    const displayName = entity?.name || id;
+    const entityType = entity?.entityType;
+
     // Arrange in a circle initially
     const angle = (index / Math.max(1, idList.length)) * 2 * Math.PI;
     const radius = isCenter ? 0 : 180 + (index % 2) * 50;
     nodeMap.set(id, {
       id,
-      name: id,
+      name: displayName,
+      type: entityType,
       x: width / 2 + Math.cos(angle) * radius,
       y: height / 2 + Math.sin(angle) * radius,
       vx: 0,
@@ -340,14 +363,14 @@ function onNodeClick(node: GraphNode, e: MouseEvent) {
             <!-- Outer Glow -->
             <circle
               :r="node.isCenter ? 26 : 20"
-              :fill="getNodeColor(node.id, node.isCenter)"
+              :fill="getNodeColor(node, node.isCenter)"
               opacity="0.2"
               class="node-halo"
             />
             <!-- Node Circle -->
             <circle
               :r="node.isCenter ? 18 : 14"
-              :fill="getNodeColor(node.id, node.isCenter)"
+              :fill="getNodeColor(node, node.isCenter)"
               :stroke="node.isCenter ? '#c084fc' : '#ffffff'"
               :stroke-width="node.isCenter ? 3 : 1.5"
               class="node-circle"
@@ -357,8 +380,9 @@ function onNodeClick(node: GraphNode, e: MouseEvent) {
               y="28"
               class="node-label"
             >
-              {{ node.id.length > 20 ? node.id.slice(0, 18) + '…' : node.id }}
+              {{ (node.name || node.id).length > 22 ? (node.name || node.id).slice(0, 20) + '…' : (node.name || node.id) }}
             </text>
+            <title>{{ node.name ? `${node.name} [${node.type || 'ENTITY'}]\nID: ${node.id}` : node.id }}</title>
           </g>
         </g>
       </g>

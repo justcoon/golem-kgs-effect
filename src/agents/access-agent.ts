@@ -4,24 +4,80 @@ import {
   AnswerResponseSchema,
   DocumentResultSchema,
   EntityResultSchema,
+  EntitySearchResponseSchema,
   GraphRAGContextBundleSchema,
   KnowledgeBaseOverviewSchema,
   NeighborhoodResponseSchema,
   PathFindingResultSchema,
   SearchResponseSchema,
   type Citation,
+  type EntityResult,
   type SearchResultItem,
 } from "./types.js";
+import { type Entity } from "../domain/entity.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import {
   CheckpointRepository,
   ChunkRepository,
   DocumentRepository,
   EntityRepository,
+  type EntityRepositoryShape,
   GraphRepository,
 } from "../storage/index.js";
 import { EmbeddingService, GraphRAGService } from "../pipeline/index.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
+
+const mapEntityToResult = (entity: Entity): EntityResult => ({
+  id: entity.id,
+  name: entity.name,
+  entityType: entity.entityType,
+  description: entity.description ?? null,
+  properties: entity.properties,
+  metadata: entity.metadata,
+});
+
+const resolveEntityId = (input: string, entityRepo: EntityRepositoryShape) =>
+  Effect.gen(function* () {
+    const trimmed = input.trim();
+    if (!trimmed) return trimmed;
+
+    // 1. Exact ID
+    const byId = yield* entityRepo.findById(trimmed);
+    if (Option.isSome(byId)) {
+      return byId.value.id;
+    }
+
+    // 2. Name match (case-insensitive or exact)
+    const byName = yield* entityRepo.findByName(trimmed);
+    if (Option.isSome(byName)) {
+      return byName.value.id;
+    }
+
+    // 3. Alias match
+    const byAlias = yield* entityRepo.findByAlias(trimmed);
+    if (Option.isSome(byAlias)) {
+      return byAlias.value.id;
+    }
+
+    // 4. Fuzzy search by name
+    const fuzzy = yield* entityRepo.searchByName(trimmed, 1);
+    if (fuzzy.length > 0 && fuzzy[0]) {
+      return fuzzy[0].id;
+    }
+
+    // Fallback: use input as given
+    return trimmed;
+  });
+
+const fetchEntitiesByIds = (
+  ids: ReadonlyArray<string>,
+  entityRepo: EntityRepositoryShape,
+) =>
+  Effect.forEach(ids, (id) => entityRepo.findById(id)).pipe(
+    Effect.map((options) =>
+      options.filter(Option.isSome).map((opt) => mapEntityToResult(opt.value)),
+    ),
+  );
 
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
@@ -44,6 +100,25 @@ export const KnowledgeAccessAgent = defineAgent({
       description:
         "Performs hybrid, vector, or keyword search across ingested document chunks",
       http: [Http.post("/search")],
+    }),
+    searchEntities: method({
+      params: {
+        query: Schema.optional(Schema.String),
+        limit: Schema.optional(Schema.Number),
+      },
+      success: EntitySearchResponseSchema,
+      description:
+        "Searches entities by name, alias, or keyword. Returns top connected hubs if query is omitted or empty.",
+      http: [Http.post("/entities/search")],
+    }),
+    getTopEntities: method({
+      params: {
+        limit: Schema.optional(Schema.Number),
+      },
+      success: EntitySearchResponseSchema,
+      description:
+        "Returns top connected entities (graph hubs) sorted by degree",
+      http: [Http.post("/entities/top")],
     }),
     getNeighborhood: method({
       params: {
@@ -162,11 +237,45 @@ export const KnowledgeAccessAgent = defineAgent({
           };
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
+      searchEntities: ({ query, limit = 10 }) =>
+        Effect.gen(function* () {
+          const entityRepo = yield* EntityRepository;
+          const trimmed = (query ?? "").trim();
+          const matched =
+            trimmed.length === 0
+              ? yield* entityRepo.getTopConnected(limit)
+              : yield* entityRepo.searchByName(trimmed, limit);
+          const entities = matched.map(mapEntityToResult);
+
+          return {
+            entities,
+            total: entities.length,
+            query: trimmed,
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      getTopEntities: ({ limit = 10 }) =>
+        Effect.gen(function* () {
+          const entityRepo = yield* EntityRepository;
+          const matched = yield* entityRepo.getTopConnected(limit);
+          const entities = matched.map(mapEntityToResult);
+
+          return {
+            entities,
+            total: entities.length,
+            query: "",
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
       getNeighborhood: ({ entityId, maxDepth, relationTypes, minConfidence }) =>
         Effect.gen(function* () {
+          const entityRepo = yield* EntityRepository;
           const graphRepo = yield* GraphRepository;
+
+          const resolvedId = yield* resolveEntityId(entityId, entityRepo);
+
           const result = yield* graphRepo.getNeighborhood({
-            seedEntityIds: [entityId],
+            seedEntityIds: [resolvedId],
             depth: maxDepth ?? 1,
             relationTypes: relationTypes
               ? Array.from(relationTypes)
@@ -174,8 +283,13 @@ export const KnowledgeAccessAgent = defineAgent({
             minConfidence: minConfidence ?? 0.0,
           });
 
+          const entities = yield* fetchEntitiesByIds(
+            result.entityIds,
+            entityRepo,
+          );
+
           return {
-            entityIds: Array.from(result.entityIds),
+            entities: Array.from(entities),
             edges: result.edges.map((e) => ({
               id: e.id,
               sourceId: e.sourceId,
@@ -274,16 +388,32 @@ export const KnowledgeAccessAgent = defineAgent({
 
       findPaths: (query) =>
         Effect.gen(function* () {
+          const entityRepo = yield* EntityRepository;
           const graphRepo = yield* GraphRepository;
+
+          const resolvedSourceId = yield* resolveEntityId(
+            query.sourceEntityId,
+            entityRepo,
+          );
+          const resolvedTargetId = yield* resolveEntityId(
+            query.targetEntityId,
+            entityRepo,
+          );
+
           const result = yield* graphRepo.findPaths({
-            sourceEntityId: query.sourceEntityId,
-            targetEntityId: query.targetEntityId,
+            sourceEntityId: resolvedSourceId,
+            targetEntityId: resolvedTargetId,
             maxDepth: query.maxDepth,
             relationTypes: query.relationTypes
               ? Array.from(query.relationTypes)
               : undefined,
             direction: query.direction,
           });
+
+          const allEntityIds = Array.from(
+            new Set(result.paths.flatMap((p) => Array.from(p.entityIds))),
+          );
+          const entities = yield* fetchEntitiesByIds(allEntityIds, entityRepo);
 
           return {
             paths: result.paths.map((p) => ({
@@ -299,6 +429,7 @@ export const KnowledgeAccessAgent = defineAgent({
               })),
               totalWeight: p.totalWeight,
             })),
+            entities: Array.from(entities),
             shortestPathLength: result.shortestPathLength,
           };
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),

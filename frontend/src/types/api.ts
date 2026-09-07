@@ -60,7 +60,7 @@ export interface AnswerResponse {
 }
 
 export interface NeighborhoodResponse {
-  entityIds: string[];
+  entities: EntityResult[];
   edges: EdgeResult[];
 }
 
@@ -72,7 +72,19 @@ export interface GraphPath {
 
 export interface PathFindingResult {
   paths: GraphPath[];
+  entities: EntityResult[];
   shortestPathLength: number | null;
+}
+
+export interface EntitySearchRequest {
+  query?: string;
+  limit?: number;
+}
+
+export interface EntitySearchResponse {
+  entities: EntityResult[];
+  total: number;
+  query: string;
 }
 
 export interface DocumentResult {

@@ -67,11 +67,13 @@ Dedicated worker agent executing the ETL pipeline for a specific storage target 
 - **`POST /api/ingestion/{resourceName}/batch-callback`**: Webhook receiver for asynchronous external batch jobs.
 
 ### 3. `KnowledgeAccessAgent` (Ephemeral / Stateless)
-High-throughput query and retrieval interface exposing GraphRAG search and graph traversal endpoints. Configured with `mode: "ephemeral"` for high concurrency.
+High-throughput query and retrieval interface exposing GraphRAG search, entity resolution, and graph traversal endpoints. Configured with `mode: "ephemeral"` for high concurrency.
 - **`POST /api/knowledge/ask`**: GraphRAG question-answering with hybrid retrieval, multi-hop entity graph traversal, and answer synthesis with citations.
 - **`POST /api/knowledge/search`**: Hybrid search combining pgvector cosine distance and full-text search fused via Reciprocal Rank Fusion (RRF, $k=60$).
-- **`POST /api/knowledge/neighborhood`**: Multi-hop topological graph traversal around seed entities.
-- **`POST /api/knowledge/paths`**: Relational shortest-path search between two entities.
+- **`POST /api/knowledge/entities/search`**: Entity search and autocomplete by prefix, name, alias, or keyword. Automatically returns top connected graph hubs when `query` is empty or omitted.
+- **`POST /api/knowledge/entities/top`**: Retrieves top connected entities (graph hubs) sorted by degree (relationship count) and freshness.
+- **`POST /api/knowledge/neighborhood`**: Multi-hop topological graph traversal around seed entities. Supports human entity names (e.g. `"PostgreSQL"`), aliases (e.g. `"postgres"`), or IDs with transparent resolution, returning complete entity records without data redundancy.
+- **`POST /api/knowledge/paths`**: Relational shortest-path search between two entities. Supports natural entity names or IDs with transparent resolution and returns populated entity lookup pools.
 - **`GET /api/knowledge/overview`**: Summary counts (documents, chunks, entities, relationships, last sync).
 - **`GET /api/knowledge/entities/{id}`**: Entity metadata, attributes, and known aliases.
 - **`GET /api/knowledge/documents/{id}`**: Raw document content, title, and metadata.
@@ -85,10 +87,12 @@ High-throughput query and retrieval interface exposing GraphRAG search and graph
 | **Knowledge** | `GET` | `/api/knowledge/overview` | Knowledge base statistics |
 | **Knowledge** | `GET` | `/api/knowledge/entities/{id}` | Entity lookup by ID |
 | **Knowledge** | `GET` | `/api/knowledge/documents/{id}` | Document lookup by ID |
+| **Knowledge** | `POST` | `/api/knowledge/entities/search` | Entity autocomplete / search by prefix, name, or alias |
+| **Knowledge** | `POST` | `/api/knowledge/entities/top` | Top connected entities (graph hubs) sorted by degree |
 | **Knowledge** | `POST` | `/api/knowledge/search` | Hybrid RRF vector + keyword search |
 | **Knowledge** | `POST` | `/api/knowledge/ask` | GraphRAG question answering |
-| **Knowledge** | `POST` | `/api/knowledge/neighborhood` | Entity neighborhood graph traversal |
-| **Knowledge** | `POST` | `/api/knowledge/paths` | Multi-hop path finding between entities |
+| **Knowledge** | `POST` | `/api/knowledge/neighborhood` | Entity neighborhood graph traversal (accepts names or IDs) |
+| **Knowledge** | `POST` | `/api/knowledge/paths` | Multi-hop path finding between entities (accepts names or IDs) |
 | **Coordinator** | `GET` | `/api/coordinator/status` | Coordinator status and active schedules |
 | **Coordinator** | `POST` | `/api/coordinator/sync` | Trigger sync run |
 | **Coordinator** | `POST` | `/api/coordinator/schedules` | Set recurring cron schedule |

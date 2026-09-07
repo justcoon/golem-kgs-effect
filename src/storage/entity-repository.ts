@@ -216,6 +216,20 @@ EntityRepository.Default = Layer.effect(
         return rows.map(mapEntityRow);
       });
 
+    const getTopConnected = (limit = 10) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<EntityRow>`
+            SELECT e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
+            FROM entities e
+            LEFT JOIN edges ed ON (e.id = ed.source_id OR e.id = ed.target_id)
+            GROUP BY e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
+            ORDER BY COUNT(ed.id) DESC, e.updated_at DESC
+            LIMIT ${limit}
+          `) as ReadonlyArray<EntityRow>;
+
+        return rows.map(mapEntityRow);
+      });
+
     const deleteEntity = (id: string) =>
       Effect.gen(function* () {
         const affected = (yield* sql`
@@ -242,6 +256,7 @@ EntityRepository.Default = Layer.effect(
       addAlias,
       listAliases,
       searchByName,
+      getTopConnected,
       deleteEntity,
       count,
     };

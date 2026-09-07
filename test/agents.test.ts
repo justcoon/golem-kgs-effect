@@ -205,14 +205,24 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       assert.deepEqual(parsedEdge.properties, {});
 
       const neighborhoodResp = {
-        entityIds: ["ent_golem", "ent_effect"],
+        entities: [
+          {
+            id: "ent_golem",
+            name: "Golem Cloud",
+            entityType: "TECHNOLOGY",
+            description: "Durable computing platform",
+            properties: "{}",
+            metadata: "{}",
+          },
+        ],
         edges: [edgeItem],
       };
 
       const parsedNeighborhood = Schema.decodeUnknownSync(
         NeighborhoodResponseSchema,
       )(neighborhoodResp);
-      assert.equal(parsedNeighborhood.entityIds.length, 2);
+      assert.equal(parsedNeighborhood.entities.length, 1);
+      assert.equal(parsedNeighborhood.entities[0]?.name, "Golem Cloud");
       assert.equal(parsedNeighborhood.edges[0]?.relationType, "USES");
 
       const entityItem = {
@@ -415,6 +425,8 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       listAliases: (entityId) =>
         Effect.sync(() => savedAliases.filter((a) => a.entityId === entityId)),
       searchByName: () => Effect.succeed([]),
+      getTopConnected: (limit = 10) =>
+        Effect.sync(() => Array.from(savedEntities.values()).slice(0, limit)),
       deleteEntity: (id) => Effect.sync(() => savedEntities.delete(id)),
       count: () => Effect.sync(() => savedEntities.size),
     };

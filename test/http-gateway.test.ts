@@ -8,6 +8,8 @@ import {
   BatchJobCallbackResultSchema,
   CoordinatorStateSchema,
   EntityResultSchema,
+  EntitySearchRequestSchema,
+  EntitySearchResponseSchema,
   KnowledgeBaseOverviewSchema,
   NeighborhoodResponseSchema,
   OneShotWebhookHandleResponseSchema,
@@ -213,6 +215,18 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.ok(params !== null);
     });
 
+    it("should match KnowledgeAccessAgent entity search route: /api/knowledge/entities/search", () => {
+      const pattern = "/api/knowledge/entities/search";
+      const params = matchRoute(pattern, "/api/knowledge/entities/search");
+      assert.ok(params !== null);
+    });
+
+    it("should match KnowledgeAccessAgent top entities route: /api/knowledge/entities/top", () => {
+      const pattern = "/api/knowledge/entities/top";
+      const params = matchRoute(pattern, "/api/knowledge/entities/top");
+      assert.ok(params !== null);
+    });
+
     it("should match IngestionCoordinatorAgent webhook ingress: /api/coordinator/webhook/{sourceType}/{resourceName}", () => {
       const pattern = "/api/coordinator/webhook/{sourceType}/{resourceName}";
       const params = matchRoute(
@@ -374,9 +388,66 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       );
     });
 
+    it("should validate EntitySearchResponseSchema for POST /api/knowledge/entities/search", () => {
+      const entitySearchRaw = {
+        entities: [
+          {
+            id: "ent_technology_postgresql",
+            name: "PostgreSQL",
+            entityType: "TECHNOLOGY",
+            description: "Relational database",
+            properties: "{}",
+            metadata: "{}",
+          },
+        ],
+        total: 1,
+        query: "postgres",
+      };
+
+      const decoded = Schema.decodeUnknownSync(EntitySearchResponseSchema)(
+        entitySearchRaw,
+      );
+      assert.equal(decoded.total, 1);
+      assert.equal(decoded.query, "postgres");
+      assert.equal(decoded.entities[0].name, "PostgreSQL");
+    });
+
+    it("should validate EntitySearchRequestSchema for optional query and limit", () => {
+      const emptyReq = {};
+      const decodedEmpty = Schema.decodeUnknownSync(EntitySearchRequestSchema)(
+        emptyReq,
+      );
+      assert.equal(decodedEmpty.query, undefined);
+      assert.equal(decodedEmpty.limit, undefined);
+
+      const filledReq = { query: "golem", limit: 5 };
+      const decodedFilled = Schema.decodeUnknownSync(EntitySearchRequestSchema)(
+        filledReq,
+      );
+      assert.equal(decodedFilled.query, "golem");
+      assert.equal(decodedFilled.limit, 5);
+    });
+
     it("should validate NeighborhoodResponseSchema for POST /api/knowledge/neighborhood", () => {
       const neighborhoodRaw = {
-        entityIds: ["ent_golem_1", "ent_golem_2"],
+        entities: [
+          {
+            id: "ent_golem_1",
+            name: "Golem",
+            entityType: "TECHNOLOGY",
+            description: "Durable computing platform",
+            properties: "{}",
+            metadata: "{}",
+          },
+          {
+            id: "ent_golem_2",
+            name: "Effect",
+            entityType: "TECHNOLOGY",
+            description: null,
+            properties: "{}",
+            metadata: "{}",
+          },
+        ],
         edges: [
           {
             id: "edge_1",
@@ -393,7 +464,8 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       const decoded = Schema.decodeUnknownSync(NeighborhoodResponseSchema)(
         neighborhoodRaw,
       );
-      assert.equal(decoded.entityIds.length, 2);
+      assert.equal(decoded.entities.length, 2);
+      assert.equal(decoded.entities[0].name, "Golem");
       assert.equal(decoded.edges.length, 1);
       assert.deepEqual(decoded.edges[0].properties, {});
     });
@@ -407,6 +479,16 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
             totalWeight: 1.0,
           },
         ],
+        entities: [
+          {
+            id: "ent_a",
+            name: "Entity A",
+            entityType: "CONCEPT",
+            description: null,
+            properties: "{}",
+            metadata: "{}",
+          },
+        ],
         shortestPathLength: 1,
       };
 
@@ -414,6 +496,8 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         pathsRaw,
       );
       assert.equal(decoded.paths.length, 1);
+      assert.equal(decoded.entities.length, 1);
+      assert.equal(decoded.entities[0].name, "Entity A");
       assert.equal(decoded.shortestPathLength, 1);
     });
 

@@ -599,6 +599,8 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
             e.name.toLowerCase().includes(query.toLowerCase()),
           ),
         ),
+      getTopConnected: (limit = 10) =>
+        Effect.sync(() => Array.from(mockEntities.values()).slice(0, limit)),
       deleteEntity: () => Effect.succeed(true),
       count: () => Effect.succeed(mockEntities.size),
     };

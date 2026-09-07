@@ -163,6 +163,9 @@ export interface EntityRepositoryShape {
     query: string,
     limit?: number,
   ) => Effect.Effect<ReadonlyArray<Entity>, SqlError>;
+  readonly getTopConnected: (
+    limit?: number,
+  ) => Effect.Effect<ReadonlyArray<Entity>, SqlError>;
   readonly deleteEntity: (id: string) => Effect.Effect<boolean, SqlError>;
   readonly count: () => Effect.Effect<number, SqlError>;
 }

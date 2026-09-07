@@ -174,12 +174,6 @@ export const EdgeResultSchema = Schema.Struct({
 });
 export type EdgeResult = typeof EdgeResultSchema.Type;
 
-export const NeighborhoodResponseSchema = Schema.Struct({
-  entityIds: Schema.Array(Schema.String),
-  edges: Schema.Array(EdgeResultSchema),
-});
-export type NeighborhoodResponse = typeof NeighborhoodResponseSchema.Type;
-
 export const EntityResultSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -189,6 +183,25 @@ export const EntityResultSchema = Schema.Struct({
   metadata: JsonFromString,
 });
 export type EntityResult = typeof EntityResultSchema.Type;
+
+export const EntitySearchRequestSchema = Schema.Struct({
+  query: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.Number),
+});
+export type EntitySearchRequest = typeof EntitySearchRequestSchema.Type;
+
+export const EntitySearchResponseSchema = Schema.Struct({
+  entities: Schema.Array(EntityResultSchema),
+  total: Schema.Number,
+  query: Schema.String,
+});
+export type EntitySearchResponse = typeof EntitySearchResponseSchema.Type;
+
+export const NeighborhoodResponseSchema = Schema.Struct({
+  entities: Schema.optional(Schema.Array(EntityResultSchema)),
+  edges: Schema.Array(EdgeResultSchema),
+});
+export type NeighborhoodResponse = typeof NeighborhoodResponseSchema.Type;
 
 export const DocumentResultSchema = Schema.Struct({
   id: Schema.String,
@@ -224,6 +237,7 @@ export type GraphPath = typeof GraphPathSchema.Type;
 
 export const PathFindingResultSchema = Schema.Struct({
   paths: Schema.Array(GraphPathSchema),
+  entities: Schema.optional(Schema.Array(EntityResultSchema)),
   shortestPathLength: Schema.NullOr(Schema.Number),
 });
 export type PathFindingResult = typeof PathFindingResultSchema.Type;

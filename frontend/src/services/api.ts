@@ -4,6 +4,7 @@ import type {
   SearchType,
   AnswerResponse,
   EntityResult,
+  EntitySearchResponse,
   DocumentResult,
   NeighborhoodResponse,
   PathFindingResult,
@@ -146,6 +147,39 @@ export const ApiService = {
   },
 
   /**
+   * Searches entities by name or keyword for autocomplete and discovery.
+   */
+  async searchEntities(query = '', limit = 10): Promise<EntityResult[]> {
+    const response = await fetch(`${API_BASE_URL}/entities/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit }),
+    });
+    const res = await handleResponse<EntitySearchResponse>(response);
+    return (res.entities || []).map(normalizeEntity);
+  },
+
+  /**
+   * Retrieves top connected entities (graph hubs) sorted by relationship degree.
+   */
+  async getTopEntities(limit = 8): Promise<EntityResult[]> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/entities/top`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit }),
+      });
+      if (response.ok) {
+        const res = await handleResponse<EntitySearchResponse>(response);
+        return (res.entities || []).map(normalizeEntity);
+      }
+    } catch {
+      // Fallback
+    }
+    return this.searchEntities('', limit);
+  },
+
+  /**
    * Traverses graph neighborhood around target entity up to maxDepth hops.
    */
   async getNeighborhood(
@@ -170,6 +204,7 @@ export const ApiService = {
     const res = await handleResponse<NeighborhoodResponse>(response);
     return {
       ...res,
+      entities: (res.entities || []).map(normalizeEntity),
       edges: (res.edges || []).map(normalizeEdge),
     };
   },
@@ -205,6 +240,7 @@ export const ApiService = {
         ...p,
         edges: (p.edges || []).map(normalizeEdge),
       })),
+      entities: (res.entities || []).map(normalizeEntity),
     };
   },
 };
