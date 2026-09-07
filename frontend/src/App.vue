@@ -207,6 +207,8 @@ onMounted(() => {
       :is-open="showEntityDrawer"
       @close="showEntityDrawer = false"
       @explore="onExploreFromDrawer"
+      @open-document="openDocument"
+      @preview-document="openDocument"
     />
 
     <!-- Footer -->

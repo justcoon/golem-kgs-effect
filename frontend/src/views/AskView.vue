@@ -197,18 +197,26 @@ function handleSelectEntity(entity: EntityResult) {
           >
             <div class="citation-header">
               <span class="citation-index">#{{ idx + 1 }}</span>
-              <span class="citation-title-text">{{ citation.title || citation.documentId }}</span>
+              <span class="citation-title-text" :title="citation.title || citation.documentId">{{ citation.title || citation.documentId }}</span>
               <button
                 class="view-doc-btn"
                 @click="emit('preview-document', citation.documentId)"
+                title="Preview document"
               >
                 📄 View Document
               </button>
             </div>
             <p class="citation-excerpt">"{{ citation.excerpt }}"</p>
             <div class="citation-footer">
-              <span class="citation-meta">Doc ID: {{ citation.documentId }}</span>
-              <span v-if="citation.sourceUri" class="citation-uri">{{ citation.sourceUri }}</span>
+              <div class="citation-meta">
+                <span class="meta-label">Doc ID:</span>
+                <code
+                  class="doc-id-code"
+                  @click="emit('preview-document', citation.documentId)"
+                  :title="`Preview document: ${citation.documentId}`"
+                >{{ citation.documentId }}</code>
+              </div>
+              <span v-if="citation.sourceUri" class="citation-uri" :title="citation.sourceUri">{{ citation.sourceUri }}</span>
             </div>
           </div>
         </div>
@@ -540,8 +548,9 @@ function handleSelectEntity(entity: EntityResult) {
 
 .citations-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
   gap: 16px;
+  min-width: 0;
 }
 
 .citation-item {
@@ -551,7 +560,15 @@ function handleSelectEntity(entity: EntityResult) {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.citation-item:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .citation-header {
@@ -559,12 +576,14 @@ function handleSelectEntity(entity: EntityResult) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .citation-index {
   font-weight: 700;
-  color: #a855f7;
+  color: #c084fc;
   font-size: 0.85rem;
+  flex-shrink: 0;
 }
 
 .citation-title-text {
@@ -575,25 +594,28 @@ function handleSelectEntity(entity: EntityResult) {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+  min-width: 0;
 }
 
 .view-doc-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--border-color);
-  color: var(--text-main);
-  padding: 4px 8px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #7dd3fc;
+  padding: 4px 10px;
   border-radius: 6px;
   font-size: 0.75rem;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.2s;
 }
 
 .view-doc-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: white;
-  transform: none;
-  box-shadow: none;
+  background: rgba(56, 189, 248, 0.25);
+  border-color: rgba(56, 189, 248, 0.6);
+  color: #bae6fd;
+  transform: translateY(-1px);
 }
 
 .citation-excerpt {
@@ -601,14 +623,64 @@ function handleSelectEntity(entity: EntityResult) {
   line-height: 1.5;
   color: var(--text-muted);
   font-style: italic;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .citation-footer {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 6px;
   font-size: 0.75rem;
   color: var(--text-muted);
   font-family: monospace;
   margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 10px;
+  min-width: 0;
+}
+
+.citation-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.meta-label {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.doc-id-code {
+  font-family: 'JetBrains Mono', monospace;
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.doc-id-code:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #bae6fd;
+}
+
+.citation-uri {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 </style>

@@ -134,8 +134,9 @@ function getScoreWidth(score: number): string {
           <button
             class="preview-btn"
             @click="emit('preview-document', item.documentId)"
+            title="View document"
           >
-            📄 Inspect Document
+            📄 View Document
           </button>
         </div>
 
@@ -144,12 +145,18 @@ function getScoreWidth(score: number): string {
         </div>
 
         <div class="card-footer">
-          <span class="doc-link">
-            Document ID: <code>{{ item.documentId }}</code>
-          </span>
-          <span class="chunk-id">
-            Chunk ID: <code>{{ item.chunkId }}</code>
-          </span>
+          <div class="footer-meta-item">
+            <span class="meta-label">Doc ID:</span>
+            <code
+              class="doc-id-code"
+              @click="emit('preview-document', item.documentId)"
+              :title="`View document: ${item.documentId}`"
+            >{{ item.documentId }}</code>
+          </div>
+          <div class="footer-meta-item">
+            <span class="meta-label">Chunk ID:</span>
+            <code class="chunk-id-code" :title="`Chunk: ${item.chunkId}`">{{ item.chunkId }}</code>
+          </div>
         </div>
       </div>
     </div>
@@ -370,22 +377,28 @@ function getScoreWidth(score: number): string {
 }
 
 .preview-btn {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border-color);
-  color: var(--text-main);
-  padding: 6px 12px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #7dd3fc;
+  padding: 5px 12px;
   border-radius: 6px;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   transition: all 0.2s;
 }
 
 .preview-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: white;
-  transform: none;
-  box-shadow: none;
+  background: rgba(56, 189, 248, 0.25);
+  border-color: rgba(56, 189, 248, 0.6);
+  color: #bae6fd;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.2);
 }
 
 .chunk-content p {
@@ -393,26 +406,71 @@ function getScoreWidth(score: number): string {
   line-height: 1.6;
   color: #cbd5e1;
   white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
+  font-family: monospace;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   padding-top: 10px;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
+  min-width: 0;
 }
 
-.card-footer code {
+.footer-meta-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.meta-label {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.doc-id-code {
+  font-family: 'JetBrains Mono', monospace;
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.doc-id-code:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #bae6fd;
+}
+
+.chunk-id-code {
   font-family: 'JetBrains Mono', monospace;
   color: #94a3b8;
   background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   padding: 2px 6px;
   border-radius: 4px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .empty-state {
