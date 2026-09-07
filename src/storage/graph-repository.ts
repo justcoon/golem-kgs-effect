@@ -148,14 +148,16 @@ GraphRepository.Default = Layer.effect(
         if (frontier.length === 0 || limit <= 0) {
           return [] as ReadonlyArray<EdgeRow>;
         }
+        const frontierParam = Pg.array(frontier);
         const hasTypes = relationTypes && relationTypes.length > 0;
+        const typesParam = hasTypes ? Pg.array(relationTypes) : null;
         if (direction === "OUTBOUND") {
           return hasTypes
             ? ((yield* sql<EdgeRow>`
                 SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
                 FROM edges
-                WHERE source_id = ANY(${frontier})
-                  AND relation_type = ANY(${relationTypes})
+                WHERE source_id = ANY(${frontierParam})
+                  AND relation_type = ANY(${typesParam})
                   AND confidence >= ${minConfidence}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
@@ -163,7 +165,7 @@ GraphRepository.Default = Layer.effect(
             : ((yield* sql<EdgeRow>`
                 SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
                 FROM edges
-                WHERE source_id = ANY(${frontier})
+                WHERE source_id = ANY(${frontierParam})
                   AND confidence >= ${minConfidence}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
@@ -173,8 +175,8 @@ GraphRepository.Default = Layer.effect(
             ? ((yield* sql<EdgeRow>`
                 SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
                 FROM edges
-                WHERE target_id = ANY(${frontier})
-                  AND relation_type = ANY(${relationTypes})
+                WHERE target_id = ANY(${frontierParam})
+                  AND relation_type = ANY(${typesParam})
                   AND confidence >= ${minConfidence}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
@@ -182,7 +184,7 @@ GraphRepository.Default = Layer.effect(
             : ((yield* sql<EdgeRow>`
                 SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
                 FROM edges
-                WHERE target_id = ANY(${frontier})
+                WHERE target_id = ANY(${frontierParam})
                   AND confidence >= ${minConfidence}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
@@ -192,8 +194,8 @@ GraphRepository.Default = Layer.effect(
             ? ((yield* sql<EdgeRow>`
                 SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
                 FROM edges
-                WHERE (source_id = ANY(${frontier}) OR target_id = ANY(${frontier}))
-                  AND relation_type = ANY(${relationTypes})
+                WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam}))
+                  AND relation_type = ANY(${typesParam})
                   AND confidence >= ${minConfidence}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
@@ -201,7 +203,7 @@ GraphRepository.Default = Layer.effect(
             : ((yield* sql<EdgeRow>`
                 SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
                 FROM edges
-                WHERE (source_id = ANY(${frontier}) OR target_id = ANY(${frontier}))
+                WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam}))
                   AND confidence >= ${minConfidence}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}

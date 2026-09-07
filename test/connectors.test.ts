@@ -19,29 +19,32 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
     it("should decode dynamic multi-resource S3 configuration under resources.s3", () => {
       const raw = {
         resources: Redacted.make({
-          s3: {
-            main: {
+          s3: [
+            {
+              name: "main",
               endpoint: "http://localhost:9000",
               region: "us-east-1",
               bucket: "golem-documents",
               accessKeyId: "rustfsadmin",
               secretAccessKey: "rustfsadmin123",
             },
-            legal: {
+            {
+              name: "legal",
               endpoint: "http://localhost:9000",
               region: "us-east-1",
               bucket: "legal-docs",
               accessKeyId: "rustfsadmin",
               secretAccessKey: "rustfsadmin123",
             },
-            technical: {
+            {
+              name: "technical",
               endpoint: "http://localhost:9000",
               region: "us-east-1",
               bucket: "technical-docs",
               accessKeyId: "rustfsadmin",
               secretAccessKey: "rustfsadmin123",
             },
-          },
+          ],
         }),
       };
 
@@ -49,16 +52,17 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
       assert.ok(Redacted.isRedacted(parsed.resources));
 
       const inner = Redacted.value(parsed.resources);
-      const resourceNames = Object.keys(inner.s3);
+      const resourceNames = inner.s3.map((r) => r.name);
 
       assert.deepEqual(resourceNames, ["main", "legal", "technical"]);
-      assert.equal(inner.s3.main.bucket, "golem-documents");
-      assert.equal(inner.s3.legal.bucket, "legal-docs");
-      assert.equal(inner.s3.technical.bucket, "technical-docs");
+      assert.equal(inner.s3.find((r) => r.name === "main")?.bucket, "golem-documents");
+      assert.equal(inner.s3.find((r) => r.name === "legal")?.bucket, "legal-docs");
+      assert.equal(inner.s3.find((r) => r.name === "technical")?.bucket, "technical-docs");
     });
 
     it("should validate a single S3ResourceTarget", () => {
       const target = Schema.decodeUnknownSync(S3ResourceTargetSchema)({
+        name: "archive",
         endpoint: "https://s3.us-west-2.amazonaws.com",
         region: "us-west-2",
         bucket: "enterprise-archive",
@@ -66,6 +70,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
         secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
       });
 
+      assert.equal(target.name, "archive");
       assert.equal(target.region, "us-west-2");
       assert.equal(target.bucket, "enterprise-archive");
     });

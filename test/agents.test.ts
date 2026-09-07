@@ -170,13 +170,14 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         content:
           "Golem Cloud durable agents provide persistent virtual compute",
         score: 0.95,
-        metadata: { source: "s3" },
+        metadata: JSON.stringify({ source: "s3" }),
       };
 
       const parsedItem = Schema.decodeUnknownSync(SearchResultItemSchema)(
         searchItem,
       );
       assert.equal(parsedItem.chunkId, "chunk_1");
+      assert.deepEqual(parsedItem.metadata, { source: "s3" });
 
       const searchResp = {
         results: [searchItem],
@@ -196,11 +197,12 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         relationType: "USES",
         weight: 1.0,
         confidence: 0.9,
-        properties: {},
+        properties: "{}",
       };
 
       const parsedEdge = Schema.decodeUnknownSync(EdgeResultSchema)(edgeItem);
       assert.equal(parsedEdge.relationType, "USES");
+      assert.deepEqual(parsedEdge.properties, {});
 
       const neighborhoodResp = {
         entityIds: ["ent_golem", "ent_effect"],
@@ -218,19 +220,21 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         name: "Golem Cloud",
         entityType: "TECHNOLOGY",
         description: "Durable computing platform",
-        properties: {},
-        metadata: {},
+        properties: "{}",
+        metadata: "{}",
       };
 
       const parsedEntity =
         Schema.decodeUnknownSync(EntityResultSchema)(entityItem);
       assert.equal(parsedEntity.name, "Golem Cloud");
+      assert.deepEqual(parsedEntity.properties, {});
+      assert.deepEqual(parsedEntity.metadata, {});
 
       const docItem = {
         id: "doc_1",
         title: "Golem Overview",
         content: "Complete documentation for Golem Cloud",
-        metadata: { author: "Alice" },
+        metadata: JSON.stringify({ author: "Alice" }),
         tags: ["guide", "docs"],
         source: "s3_main",
         namespace: "default",
@@ -242,6 +246,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       const parsedDoc = Schema.decodeUnknownSync(DocumentResultSchema)(docItem);
       assert.equal(parsedDoc.title, "Golem Overview");
       assert.equal(parsedDoc.sizeBytes, 1024);
+      assert.deepEqual(parsedDoc.metadata, { author: "Alice" });
     });
 
     it("should calculate correct WIT wall-clock scheduledAt record for Golem native host scheduler", () => {

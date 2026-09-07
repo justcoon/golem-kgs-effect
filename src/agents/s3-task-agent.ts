@@ -6,10 +6,29 @@ import {
   Snapshot,
   Webhook,
 } from "@golemcloud/effect-golem";
-import { BatchJobCallbackResultSchema, S3TaskStateSchema } from "./types.js";
+import {
+  BatchJobCallbackResultSchema,
+  S3TaskStateSchema,
+  S3TaskStatusResponseSchema,
+  type S3TaskState,
+  type S3TaskStatusResponse,
+} from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
 import { runS3Ingestion } from "../pipeline/s3-ingestion-pipeline.js";
+
+const toStatusResponse = (s: S3TaskState): S3TaskStatusResponse => ({
+  resourceName: s.resourceName,
+  status: s.status,
+  lastSyncTimestamp: s.lastSyncTimestamp,
+  processedKeys: Object.entries(s.processedKeys).map(([key, etag]) => ({
+    key,
+    etag,
+  })),
+  cursor: s.cursor,
+  metrics: s.metrics,
+  errorMessage: s.errorMessage,
+});
 
 export const S3IngestorTaskAgent = defineAgent({
   name: "S3IngestorTaskAgent",
@@ -30,20 +49,20 @@ export const S3IngestorTaskAgent = defineAgent({
       params: {
         force: Schema.optional(Schema.Boolean),
       },
-      success: S3TaskStateSchema,
+      success: S3TaskStatusResponseSchema,
       description:
         "Executes full or incremental synchronization of the bound S3 resource",
       http: [Http.post("/sync")],
     }),
     getStatus: method({
       params: {},
-      success: S3TaskStateSchema,
+      success: S3TaskStatusResponseSchema,
       description: "Returns the current synchronization state and metrics",
       http: [Http.get("/status")],
     }),
     resetCursor: method({
       params: {},
-      success: S3TaskStateSchema,
+      success: S3TaskStatusResponseSchema,
       description:
         "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
@@ -97,7 +116,7 @@ export const S3IngestorTaskAgent = defineAgent({
             force,
           }).pipe(Effect.provide(pipelineLayer));
 
-          return yield* Ref.updateAndGet(state, (s) => ({
+          const updated = yield* Ref.updateAndGet(state, (s) => ({
             ...s,
             status: result.status,
             lastSyncTimestamp: result.lastSyncTimestamp,
@@ -106,9 +125,10 @@ export const S3IngestorTaskAgent = defineAgent({
             metrics: result.metrics,
             errorMessage: result.errorMessage,
           }));
+          return toStatusResponse(updated);
         }),
 
-      getStatus: () => Ref.get(state),
+      getStatus: () => Ref.get(state).pipe(Effect.map(toStatusResponse)),
 
       resetCursor: () =>
         Ref.updateAndGet(state, (s) => ({
@@ -118,7 +138,7 @@ export const S3IngestorTaskAgent = defineAgent({
           cursor: null,
           status: "IDLE" as const,
           errorMessage: null,
-        })),
+        })).pipe(Effect.map(toStatusResponse)),
 
       awaitBatchJob: ({ jobId }) =>
         Effect.gen(function* () {

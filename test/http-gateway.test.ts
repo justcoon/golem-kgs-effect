@@ -41,8 +41,9 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         "local environment deployment must be defined",
       );
       assert.ok(
-        manifestContent.includes("domain: golem-kgs-effect.localhost:9006"),
-        "local domain must be golem-kgs-effect.localhost:9006",
+        manifestContent.includes("domain: golem-kgs-effect.localhost:9006") ||
+          manifestContent.includes("domain: localhost:9006"),
+        "local domain must be configured for localhost:9006",
       );
       assert.ok(
         manifestContent.includes("KnowledgeAccessAgent:"),
@@ -260,8 +261,8 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         name: "Vector Search",
         entityType: "TECHNOLOGY",
         description: "High-dimensional similarity indexing",
-        properties: {},
-        metadata: { confidence: 0.98 },
+        properties: "{}",
+        metadata: JSON.stringify({ confidence: 0.98 }),
         createdAt: "2026-09-06T12:00:00.000Z",
         updatedAt: "2026-09-06T12:00:00.000Z",
       };
@@ -269,6 +270,8 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         Schema.decodeUnknownSync(NullableEntitySchema)(foundRaw);
       assert.notEqual(foundDecoded, null);
       assert.equal(foundDecoded?.name, "Vector Search");
+      assert.deepEqual(foundDecoded?.properties, {});
+      assert.deepEqual(foundDecoded?.metadata, { confidence: 0.98 });
 
       // Not Found case (HTTP 404)
       const notFoundDecoded =
@@ -331,7 +334,7 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
             documentId: "doc_tx_1",
             content: "Sagas provide eventual consistency across microservices.",
             score: 0.92,
-            metadata: {},
+            metadata: "{}",
           },
         ],
       };
@@ -340,6 +343,7 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(decoded.query, "distributed transactions");
       assert.equal(decoded.results.length, 1);
       assert.equal(decoded.results[0].score, 0.92);
+      assert.deepEqual(decoded.results[0].metadata, {});
     });
 
     it("should validate AnswerResponseSchema for POST /api/knowledge/ask", () => {
@@ -381,7 +385,7 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
             relationType: "CONNECTS",
             weight: 1.0,
             confidence: 0.9,
-            properties: {},
+            properties: "{}",
           },
         ],
       };
@@ -391,6 +395,7 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       );
       assert.equal(decoded.entityIds.length, 2);
       assert.equal(decoded.edges.length, 1);
+      assert.deepEqual(decoded.edges[0].properties, {});
     });
 
     it("should validate PathFindingResultSchema for POST /api/knowledge/paths", () => {

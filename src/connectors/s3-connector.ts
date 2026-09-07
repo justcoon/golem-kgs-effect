@@ -47,6 +47,18 @@ export interface S3ConnectorOptions {
   readonly supportedExtensions?: ReadonlyArray<string>;
 }
 
+function toSafeRequestHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() !== "host") {
+      safe[k] = v;
+    }
+  }
+  return safe;
+}
+
 function extractTitle(content: string, key: string): string {
   const headingMatch = content.match(/^#\s+(.+)$/m);
   const heading = headingMatch?.[1]?.trim();
@@ -107,13 +119,15 @@ export class S3Connector implements SourceConnector<
       "max-keys": "1",
     });
 
-    const headers = signS3Request({
-      method: "GET",
-      url,
-      region: this.target.region,
-      accessKeyId: this.target.accessKeyId,
-      secretAccessKey: this.target.secretAccessKey,
-    });
+    const headers = toSafeRequestHeaders(
+      signS3Request({
+        method: "GET",
+        url,
+        region: this.target.region,
+        accessKeyId: this.target.accessKeyId,
+        secretAccessKey: this.target.secretAccessKey,
+      }),
+    );
 
     const request = HttpClientRequest.get(url.toString()).pipe(
       HttpClientRequest.setHeaders(headers),
@@ -170,13 +184,15 @@ export class S3Connector implements SourceConnector<
             queryParams,
           );
 
-          const headers = signS3Request({
-            method: "GET",
-            url,
-            region: target.region,
-            accessKeyId: target.accessKeyId,
-            secretAccessKey: target.secretAccessKey,
-          });
+          const headers = toSafeRequestHeaders(
+            signS3Request({
+              method: "GET",
+              url,
+              region: target.region,
+              accessKeyId: target.accessKeyId,
+              secretAccessKey: target.secretAccessKey,
+            }),
+          );
 
           const request = HttpClientRequest.get(url.toString()).pipe(
             HttpClientRequest.setHeaders(headers),
@@ -258,13 +274,15 @@ export class S3Connector implements SourceConnector<
     return Effect.gen(function* () {
       const url = buildS3Url(target.endpoint, target.bucket, item.id);
 
-      const headers = signS3Request({
-        method: "GET",
-        url,
-        region: target.region,
-        accessKeyId: target.accessKeyId,
-        secretAccessKey: target.secretAccessKey,
-      });
+      const headers = toSafeRequestHeaders(
+        signS3Request({
+          method: "GET",
+          url,
+          region: target.region,
+          accessKeyId: target.accessKeyId,
+          secretAccessKey: target.secretAccessKey,
+        }),
+      );
 
       const request = HttpClientRequest.get(url.toString()).pipe(
         HttpClientRequest.setHeaders(headers),

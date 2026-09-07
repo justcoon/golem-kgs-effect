@@ -745,7 +745,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
                 relationType: "CONNECTS",
                 weight: 1.0,
                 confidence: 0.95,
-                properties: {},
+                properties: "{}",
               },
             ],
             totalWeight: 1.0,
@@ -760,6 +760,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
       assert.equal(parsedResult.paths.length, 1);
       assert.equal(parsedResult.shortestPathLength, 1);
       assert.equal(parsedResult.paths[0]?.entityIds.length, 2);
+      assert.deepEqual(parsedResult.paths[0]?.edges[0]?.properties, {});
     });
   });
 });

@@ -42,10 +42,17 @@ export const makeAgentPipelineLayer = (configOrApp?: AppAgentConfigService) =>
     const model = yield* config.embedding.model;
     const apiKey = yield* config.embedding.apiKey.get;
 
-    const resourcesVal = Redacted.value(yield* config.resources.get) as {
-      s3?: Record<string, S3ResourceTarget>;
-    };
-    const s3Targets: Record<string, S3ResourceTarget> = resourcesVal?.s3 ?? {};
+    const resourcesVal = Redacted.value(yield* config.resources.get) as any;
+    const s3Raw = resourcesVal?.s3;
+    const s3Entries: [string, S3ResourceTarget][] = Array.isArray(s3Raw)
+      ? s3Raw.map((target: S3ResourceTarget) => [target.name, target])
+      : s3Raw instanceof Map
+        ? Array.from(s3Raw.entries())
+        : typeof s3Raw === "object" && s3Raw !== null
+          ? Object.entries(s3Raw)
+          : [];
+    const s3Targets: Record<string, S3ResourceTarget> =
+      Object.fromEntries(s3Entries);
 
     const extractionVal = yield* config.extraction;
     const extractionRules: ExtractionConfig | undefined = Option.isOption(

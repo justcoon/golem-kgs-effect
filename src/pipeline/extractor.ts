@@ -10,10 +10,16 @@ import {
 } from "../domain/relationship.js";
 import { type CreateChunkInput } from "../domain/chunk.js";
 
-import { type RelationPatternRule } from "../config/schema.js";
+import {
+  type DictionaryEntry,
+  type RelationPatternRule,
+} from "../config/schema.js";
 
 export interface ExtractionRules {
-  readonly dictionary?: Record<string, string> | ReadonlyMap<string, string>;
+  readonly dictionary?:
+    | Record<string, string>
+    | ReadonlyMap<string, string>
+    | ReadonlyArray<DictionaryEntry>;
   readonly relationPatterns?: ReadonlyArray<RelationPatternRule>;
   readonly stopwords?: ReadonlyArray<string>;
 }
@@ -114,10 +120,11 @@ export class EntityExtractor {
 
     // 2. Dictionary-based Entity Recognition
     const lowerText = text.toLowerCase();
-    const dictionary = rules?.dictionary ?? {};
-    const dictEntries =
-      dictionary instanceof Map
-        ? dictionary.entries()
+    const dictionary = rules?.dictionary ?? [];
+    const dictEntries: [string, string][] = Array.isArray(dictionary)
+      ? dictionary.map((d: DictionaryEntry) => [d.alias, d.canonical])
+      : dictionary instanceof Map
+        ? Array.from(dictionary.entries())
         : Object.entries(dictionary);
     for (const [kw, canonical] of dictEntries) {
       const regex = new RegExp(`\\b${escapeRegex(kw)}\\b`, "i");

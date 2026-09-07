@@ -311,11 +311,12 @@ Lexical full-text search indexes provide keyword recall.
       assert.equal(parsedRule.confidence, 0.88);
 
       const parsedConfig = Schema.decodeUnknownSync(ExtractionConfigSchema)({
-        dictionary: { k8s: "Kubernetes" },
+        dictionary: [{ alias: "k8s", canonical: "Kubernetes" }],
         relationPatterns: [parsedRule],
         stopwords: ["Notice"],
       });
-      assert.equal(parsedConfig.dictionary?.k8s, "Kubernetes");
+      assert.equal(parsedConfig.dictionary?.[0]?.alias, "k8s");
+      assert.equal(parsedConfig.dictionary?.[0]?.canonical, "Kubernetes");
       assert.equal(parsedConfig.relationPatterns?.length, 1);
       assert.equal(parsedConfig.stopwords?.[0], "Notice");
     });

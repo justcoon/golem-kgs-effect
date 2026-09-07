@@ -3,6 +3,7 @@ import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 import {
   calculateScheduledAt,
   CoordinatorStateSchema,
+  CoordinatorStatusResponseSchema,
   SourceTypeSchema,
   SyncScheduleSchema,
   TaskRunSummarySchema,
@@ -79,7 +80,7 @@ export const IngestionCoordinatorAgent = defineAgent({
     }),
     getSystemStatus: method({
       params: {},
-      success: CoordinatorStateSchema,
+      success: CoordinatorStatusResponseSchema,
       description:
         "Returns current coordinator state and all configured schedules",
       http: [Http.get("/status")],
@@ -267,7 +268,13 @@ export const IngestionCoordinatorAgent = defineAgent({
           return true;
         }),
 
-      getSystemStatus: () => Ref.get(state),
+      getSystemStatus: () =>
+        Ref.get(state).pipe(
+          Effect.map((s) => ({
+            schedules: Object.values(s.schedules),
+            aggregatedMetrics: s.aggregatedMetrics,
+          })),
+        ),
 
       pauseSchedule: ({ sourceType, resourceName }) =>
         Effect.gen(function* () {

@@ -4,7 +4,7 @@ export const DatabaseConfigFields = {
   db: Schema.Struct({
     host: Schema.String,
     db: Schema.String,
-    port: Schema.Union([Schema.String, Schema.Number]),
+    port: Schema.String,
     user: Schema.Redacted(Schema.String),
     password: Schema.Redacted(Schema.String),
   }),
@@ -36,6 +36,7 @@ export class EmbeddingConfigValues extends Context.Service<
 >()("app/config/EmbeddingConfigValues") {}
 
 export const S3ResourceTargetSchema = Schema.Struct({
+  name: Schema.String,
   endpoint: Schema.String,
   region: Schema.String,
   bucket: Schema.String,
@@ -46,7 +47,7 @@ export const S3ResourceTargetSchema = Schema.Struct({
 export type S3ResourceTarget = typeof S3ResourceTargetSchema.Type;
 
 export const ResourcesSecretSchema = Schema.Struct({
-  s3: Schema.Record(Schema.String, S3ResourceTargetSchema),
+  s3: Schema.Array(S3ResourceTargetSchema),
 });
 export type ResourcesSecretSchema = typeof ResourcesSecretSchema.Type;
 
@@ -74,8 +75,14 @@ export const RelationPatternRuleSchema = Schema.Struct({
 });
 export type RelationPatternRule = typeof RelationPatternRuleSchema.Type;
 
+export const DictionaryEntrySchema = Schema.Struct({
+  alias: Schema.String,
+  canonical: Schema.String,
+});
+export type DictionaryEntry = typeof DictionaryEntrySchema.Type;
+
 export const ExtractionConfigSchema = Schema.Struct({
-  dictionary: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  dictionary: Schema.optional(Schema.Array(DictionaryEntrySchema)),
   relationPatterns: Schema.optional(Schema.Array(RelationPatternRuleSchema)),
   stopwords: Schema.optional(Schema.Array(Schema.String)),
 });

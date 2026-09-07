@@ -203,7 +203,7 @@ ChunkRepository.Default = Layer.effect(
         const rows = (yield* sql<{ entity_id: string }>`
             SELECT DISTINCT entity_id
             FROM entity_chunks
-            WHERE chunk_id = ANY(${chunkIds})
+            WHERE chunk_id = ANY(${Pg.array(chunkIds)})
           `) as ReadonlyArray<{ entity_id: string }>;
 
         return rows.map((r) => r.entity_id);

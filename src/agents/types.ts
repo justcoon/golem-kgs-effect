@@ -1,4 +1,25 @@
-import { Schema } from "effect";
+import { Schema, SchemaGetter } from "effect";
+
+/**
+ * Schema representing arbitrary JSON data lowered to a string for WIT compatibility.
+ * Decodes a JSON string into an object; encodes an object to a JSON string on the wire.
+ */
+export const JsonFromString = Schema.String.pipe(
+  Schema.decodeTo(Schema.Unknown, {
+    decode: SchemaGetter.transform((s) => {
+      if (!s) return {};
+      try {
+        return JSON.parse(s);
+      } catch {
+        return s;
+      }
+    }),
+    encode: SchemaGetter.transform((u) => {
+      if (u === undefined || u === null) return "{}";
+      return typeof u === "string" ? u : JSON.stringify(u);
+    }),
+  }),
+);
 
 // --- S3 Ingestion Task Agent Schemas ---
 
@@ -18,6 +39,12 @@ export const S3TaskStatusSchema = Schema.Literals([
 ]);
 export type S3TaskStatus = typeof S3TaskStatusSchema.Type;
 
+export const S3ProcessedKeyEntrySchema = Schema.Struct({
+  key: Schema.String,
+  etag: Schema.String,
+});
+export type S3ProcessedKeyEntry = typeof S3ProcessedKeyEntrySchema.Type;
+
 export const S3TaskStateSchema = Schema.Struct({
   resourceName: Schema.String,
   status: S3TaskStatusSchema,
@@ -28,6 +55,17 @@ export const S3TaskStateSchema = Schema.Struct({
   errorMessage: Schema.NullOr(Schema.String),
 });
 export type S3TaskState = typeof S3TaskStateSchema.Type;
+
+export const S3TaskStatusResponseSchema = Schema.Struct({
+  resourceName: Schema.String,
+  status: S3TaskStatusSchema,
+  lastSyncTimestamp: Schema.NullOr(Schema.String),
+  processedKeys: Schema.Array(S3ProcessedKeyEntrySchema),
+  cursor: Schema.NullOr(Schema.String),
+  metrics: S3TaskMetricsSchema,
+  errorMessage: Schema.NullOr(Schema.String),
+});
+export type S3TaskStatusResponse = typeof S3TaskStatusResponseSchema.Type;
 
 // --- Ingestion Coordinator Agent Schemas ---
 
@@ -100,6 +138,13 @@ export const CoordinatorStateSchema = Schema.Struct({
 });
 export type CoordinatorState = typeof CoordinatorStateSchema.Type;
 
+export const CoordinatorStatusResponseSchema = Schema.Struct({
+  schedules: Schema.Array(SyncScheduleSchema),
+  aggregatedMetrics: CoordinatorMetricsSchema,
+});
+export type CoordinatorStatusResponse =
+  typeof CoordinatorStatusResponseSchema.Type;
+
 // --- Knowledge Access Agent Schemas ---
 
 export const SearchResultItemSchema = Schema.Struct({
@@ -107,7 +152,7 @@ export const SearchResultItemSchema = Schema.Struct({
   documentId: Schema.String,
   content: Schema.String,
   score: Schema.Number,
-  metadata: Schema.Unknown,
+  metadata: JsonFromString,
 });
 export type SearchResultItem = typeof SearchResultItemSchema.Type;
 
@@ -125,7 +170,7 @@ export const EdgeResultSchema = Schema.Struct({
   relationType: Schema.String,
   weight: Schema.Number,
   confidence: Schema.Number,
-  properties: Schema.Unknown,
+  properties: JsonFromString,
 });
 export type EdgeResult = typeof EdgeResultSchema.Type;
 
@@ -140,8 +185,8 @@ export const EntityResultSchema = Schema.Struct({
   name: Schema.String,
   entityType: Schema.String,
   description: Schema.NullOr(Schema.String),
-  properties: Schema.Unknown,
-  metadata: Schema.Unknown,
+  properties: JsonFromString,
+  metadata: JsonFromString,
 });
 export type EntityResult = typeof EntityResultSchema.Type;
 
@@ -149,7 +194,7 @@ export const DocumentResultSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   content: Schema.String,
-  metadata: Schema.Unknown,
+  metadata: JsonFromString,
   tags: Schema.Array(Schema.String),
   source: Schema.String,
   namespace: Schema.String,
