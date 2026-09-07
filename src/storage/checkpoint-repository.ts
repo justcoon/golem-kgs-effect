@@ -100,11 +100,22 @@ CheckpointRepository.Default = Layer.effect(
         return Number(affected) > 0;
       });
 
+    const getLatestSyncTime = () =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<{ last_sync: Date | string | null }>`
+            SELECT MAX(last_sync_time) AS last_sync FROM sync_checkpoints
+          `) as ReadonlyArray<{ last_sync: Date | string | null }>;
+
+        const raw = rows[0]?.last_sync;
+        return raw ? Option.some(new Date(raw)) : Option.none();
+      });
+
     return {
       saveCheckpoint,
       getCheckpoint,
       listCheckpoints,
       deleteCheckpoint,
+      getLatestSyncTime,
     };
   }),
 );

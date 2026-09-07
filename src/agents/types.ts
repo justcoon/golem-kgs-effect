@@ -145,6 +145,20 @@ export const EntityResultSchema = Schema.Struct({
 });
 export type EntityResult = typeof EntityResultSchema.Type;
 
+export const DocumentResultSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  content: Schema.String,
+  metadata: Schema.Unknown,
+  tags: Schema.Array(Schema.String),
+  source: Schema.String,
+  namespace: Schema.String,
+  sizeBytes: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type DocumentResult = typeof DocumentResultSchema.Type;
+
 // --- Path Finding Schemas ---
 
 export const PathFindingQuerySchema = Schema.Struct({

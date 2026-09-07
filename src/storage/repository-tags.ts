@@ -44,6 +44,7 @@ export interface DocumentRepositoryShape {
     offset?: number;
   }) => Effect.Effect<ReadonlyArray<RawDocument>, SqlError>;
   readonly deleteDocument: (id: string) => Effect.Effect<boolean, SqlError>;
+  readonly count: () => Effect.Effect<number, SqlError>;
 }
 
 export class DocumentRepository extends Context.Service<
@@ -90,6 +91,7 @@ export interface ChunkRepositoryShape {
   readonly searchHybrid: (
     query: HybridSearchQuery,
   ) => Effect.Effect<ReadonlyArray<SearchResultItem>, SqlError>;
+  readonly count: () => Effect.Effect<number, SqlError>;
 }
 
 export class ChunkRepository extends Context.Service<
@@ -115,6 +117,10 @@ export interface CheckpointRepositoryShape {
   readonly deleteCheckpoint: (
     connectorId: string,
   ) => Effect.Effect<boolean, SqlError>;
+  readonly getLatestSyncTime: () => Effect.Effect<
+    Option.Option<Date>,
+    SqlError
+  >;
 }
 
 export class CheckpointRepository extends Context.Service<
@@ -158,6 +164,7 @@ export interface EntityRepositoryShape {
     limit?: number,
   ) => Effect.Effect<ReadonlyArray<Entity>, SqlError>;
   readonly deleteEntity: (id: string) => Effect.Effect<boolean, SqlError>;
+  readonly count: () => Effect.Effect<number, SqlError>;
 }
 
 export class EntityRepository extends Context.Service<
@@ -197,6 +204,7 @@ export interface GraphRepositoryShape {
     query: PathFindingQuery,
   ) => Effect.Effect<PathFindingResult, SqlError>;
   readonly deleteEdge: (id: string) => Effect.Effect<boolean, SqlError>;
+  readonly countEdges: () => Effect.Effect<number, SqlError>;
 }
 
 export class GraphRepository extends Context.Service<

@@ -4,6 +4,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 import {
   calculateScheduledAt,
   CoordinatorStateSchema,
+  DocumentResultSchema,
   EdgeResultSchema,
   EntityResultSchema,
   NeighborhoodResponseSchema,
@@ -224,6 +225,23 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       const parsedEntity =
         Schema.decodeUnknownSync(EntityResultSchema)(entityItem);
       assert.equal(parsedEntity.name, "Golem Cloud");
+
+      const docItem = {
+        id: "doc_1",
+        title: "Golem Overview",
+        content: "Complete documentation for Golem Cloud",
+        metadata: { author: "Alice" },
+        tags: ["guide", "docs"],
+        source: "s3_main",
+        namespace: "default",
+        sizeBytes: 1024,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const parsedDoc = Schema.decodeUnknownSync(DocumentResultSchema)(docItem);
+      assert.equal(parsedDoc.title, "Golem Overview");
+      assert.equal(parsedDoc.sizeBytes, 1024);
     });
 
     it("should calculate correct WIT wall-clock scheduledAt record for Golem native host scheduler", () => {
@@ -267,6 +285,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         Effect.sync(() => {
           return savedDocs.delete(id);
         }),
+      count: () => Effect.sync(() => savedDocs.size),
     };
 
     const mockChunkRepo: ChunkRepositoryShape = {
@@ -304,6 +323,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       searchVector: () => Effect.succeed([]),
       searchKeyword: () => Effect.succeed([]),
       searchHybrid: () => Effect.succeed([]),
+      count: () => Effect.sync(() => savedChunks.length),
     };
 
     const mockCheckpointRepo: CheckpointRepositoryShape = {
@@ -329,6 +349,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       listCheckpoints: () =>
         Effect.sync(() => Array.from(savedCheckpoints.values())),
       deleteCheckpoint: (id) => Effect.sync(() => savedCheckpoints.delete(id)),
+      getLatestSyncTime: () => Effect.sync(() => Option.none()),
     };
 
     const mockEntityRepo: EntityRepositoryShape = {
@@ -390,6 +411,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         Effect.sync(() => savedAliases.filter((a) => a.entityId === entityId)),
       searchByName: () => Effect.succeed([]),
       deleteEntity: (id) => Effect.sync(() => savedEntities.delete(id)),
+      count: () => Effect.sync(() => savedEntities.size),
     };
 
     const mockGraphRepo: GraphRepositoryShape = {
@@ -435,6 +457,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
           }
           return false;
         }),
+      countEdges: () => Effect.sync(() => savedEdges.length),
     };
 
     const mockFiles = {

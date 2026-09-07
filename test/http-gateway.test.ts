@@ -195,6 +195,17 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(params?.id, "ent_golem_1");
     });
 
+    it("should match KnowledgeAccessAgent document lookup route: /api/knowledge/documents/{id}", () => {
+      const pattern = "/api/knowledge/documents/{id}";
+      const params = matchRoute(
+        pattern,
+        "/api/knowledge/documents/doc_rfc_101",
+      );
+
+      assert.ok(params !== null);
+      assert.equal(params?.id, "doc_rfc_101");
+    });
+
     it("should match KnowledgeAccessAgent overview route: /api/knowledge/overview", () => {
       const pattern = "/api/knowledge/overview";
       const params = matchRoute(pattern, "/api/knowledge/overview");

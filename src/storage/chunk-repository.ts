@@ -306,6 +306,14 @@ ChunkRepository.Default = Layer.effect(
         }));
       });
 
+    const count = () =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ count: string | number }>`
+            SELECT COUNT(*) AS count FROM chunks
+          `;
+        return Number(rows[0]?.count ?? 0);
+      });
+
     return {
       saveRawDocument,
       getRawDocument,
@@ -317,6 +325,7 @@ ChunkRepository.Default = Layer.effect(
       searchVector,
       searchKeyword,
       searchHybrid,
+      count,
     };
   }),
 );

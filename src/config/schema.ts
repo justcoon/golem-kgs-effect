@@ -66,3 +66,21 @@ export class ResourcesConfigValues extends Context.Service<
   ResourcesConfigValues,
   ResourcesConfigShape
 >()("app/config/ResourcesConfigValues") {}
+
+export const RelationPatternRuleSchema = Schema.Struct({
+  relation: Schema.String,
+  phrases: Schema.Array(Schema.String),
+  confidence: Schema.optional(Schema.Number),
+});
+export type RelationPatternRule = typeof RelationPatternRuleSchema.Type;
+
+export const ExtractionConfigSchema = Schema.Struct({
+  dictionary: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  relationPatterns: Schema.optional(Schema.Array(RelationPatternRuleSchema)),
+  stopwords: Schema.optional(Schema.Array(Schema.String)),
+});
+export type ExtractionConfig = typeof ExtractionConfigSchema.Type;
+
+export const ExtractionConfigFields = {
+  extraction: Schema.optional(ExtractionConfigSchema),
+};

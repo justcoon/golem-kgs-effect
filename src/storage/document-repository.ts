@@ -141,11 +141,20 @@ DocumentRepository.Default = Layer.effect(
         return (result.length ?? 0) >= 0;
       });
 
+    const count = () =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ count: string | number }>`
+            SELECT COUNT(*) AS count FROM documents
+          `;
+        return Number(rows[0]?.count ?? 0);
+      });
+
     return {
       saveDocument,
       findDocumentById,
       listDocuments,
       deleteDocument,
+      count,
     };
   }),
 );

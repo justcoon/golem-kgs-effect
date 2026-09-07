@@ -1,7 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Effect, Redacted, Schema } from "effect";
-import { EmbeddingConfigSchema } from "../src/config/schema.js";
+import {
+  EmbeddingConfigSchema,
+  ExtractionConfigSchema,
+  RelationPatternRuleSchema,
+} from "../src/config/schema.js";
 import { DocumentChunker } from "../src/pipeline/chunker.js";
 import {
   EMBEDDING_DIMENSION,
@@ -168,10 +172,34 @@ Lexical full-text search indexes provide keyword recall.
       );
     });
 
+    const sampleTechRules = {
+      dictionary: {
+        "golem cloud": "Golem Cloud",
+        golem: "Golem Cloud",
+        postgresql: "PostgreSQL",
+        postgres: "PostgreSQL",
+        pgvector: "pgvector",
+        webassembly: "WebAssembly",
+        docker: "Docker",
+      },
+      relationPatterns: [
+        {
+          relation: "DEPENDS_ON",
+          phrases: ["utilizes", "requires", "uses", "depends on"],
+          confidence: 0.85,
+        },
+      ],
+    };
+
     it("should extract known technologies and documents", () => {
       const text =
         "Golem Cloud components run on WebAssembly and use PostgreSQL with pgvector for persistence. See `golem.yaml`.";
-      const extracted = EntityExtractor.extract(text, "doc_test_2", 1);
+      const extracted = EntityExtractor.extract(
+        text,
+        "doc_test_2",
+        1,
+        sampleTechRules,
+      );
 
       const names = extracted.entities.map((e) => e.name);
       assert.ok(names.includes("Golem Cloud"));
@@ -184,13 +212,112 @@ Lexical full-text search indexes provide keyword recall.
     it("should extract relational triples based on linguistic patterns", () => {
       const text =
         "Golem Cloud utilizes PostgreSQL for storage and requires Docker for deployment.";
-      const extracted = EntityExtractor.extract(text, "doc_test_3", 0);
+      const extracted = EntityExtractor.extract(
+        text,
+        "doc_test_3",
+        0,
+        sampleTechRules,
+      );
 
       assert.ok(extracted.edges.length >= 1);
       const edge = extracted.edges[0];
       assert.equal(edge.relationType, "DEPENDS_ON");
       assert.ok(edge.sourceId.includes("golem_cloud"));
       assert.ok(edge.targetId.includes("postgresql"));
+    });
+
+    it("should extract custom domain entities and relations when custom rules are provided", () => {
+      const customRules = {
+        dictionary: {
+          gdpr: "General Data Protection Regulation",
+          ccpa: "California Consumer Privacy Act",
+        },
+        relationPatterns: [
+          {
+            relation: "GOVERNED_BY",
+            phrases: ["is governed by", "governed by", "subject to"],
+            confidence: 0.92,
+          },
+        ],
+        stopwords: ["Legal Notice", "Article"],
+      };
+
+      const text =
+        "Customer Data is governed by GDPR and must comply with CCPA.";
+      const extracted = EntityExtractor.extract(
+        text,
+        "doc_legal_1",
+        0,
+        customRules,
+      );
+
+      const names = extracted.entities.map((e) => e.name);
+      assert.ok(names.includes("General Data Protection Regulation"));
+      assert.ok(names.includes("California Consumer Privacy Act"));
+
+      assert.ok(extracted.edges.length >= 1);
+      const edge = extracted.edges.find(
+        (e) => e.relationType === "GOVERNED_BY",
+      );
+      assert.ok(edge);
+      assert.equal(edge?.confidence, 0.92);
+    });
+
+    it("should respect custom stopwords to filter false-positive proper nouns", () => {
+      const customRules = {
+        stopwords: ["Legal Notice", "Table Of Contents"],
+      };
+
+      const text = "Legal Notice: The System Architecture requires review.";
+      const extracted = EntityExtractor.extract(
+        text,
+        "doc_legal_2",
+        0,
+        customRules,
+      );
+
+      const names = extracted.entities.map((e) => e.name);
+      assert.ok(!names.includes("Legal Notice"));
+      assert.ok(names.includes("System Architecture"));
+    });
+
+    it("should not match default technologies when empty dictionary is provided", () => {
+      const emptyRules = {
+        dictionary: {},
+        relationPatterns: [],
+      };
+
+      const text = "We run Postgres and Docker in production.";
+      const extracted = EntityExtractor.extract(
+        text,
+        "doc_clean_1",
+        0,
+        emptyRules,
+      );
+
+      const names = extracted.entities.map((e) => e.name);
+      assert.ok(!names.includes("PostgreSQL"));
+      assert.ok(!names.includes("Docker"));
+      assert.equal(extracted.edges.length, 0);
+    });
+
+    it("should validate ExtractionConfigSchema and RelationPatternRuleSchema", () => {
+      const parsedRule = Schema.decodeUnknownSync(RelationPatternRuleSchema)({
+        relation: "MANAGES",
+        phrases: ["manages", "supervises"],
+        confidence: 0.88,
+      });
+      assert.equal(parsedRule.relation, "MANAGES");
+      assert.equal(parsedRule.confidence, 0.88);
+
+      const parsedConfig = Schema.decodeUnknownSync(ExtractionConfigSchema)({
+        dictionary: { k8s: "Kubernetes" },
+        relationPatterns: [parsedRule],
+        stopwords: ["Notice"],
+      });
+      assert.equal(parsedConfig.dictionary?.k8s, "Kubernetes");
+      assert.equal(parsedConfig.relationPatterns?.length, 1);
+      assert.equal(parsedConfig.stopwords?.[0], "Notice");
     });
   });
 

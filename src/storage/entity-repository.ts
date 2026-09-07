@@ -225,6 +225,14 @@ EntityRepository.Default = Layer.effect(
         return Number(affected) > 0;
       });
 
+    const count = () =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ count: string | number }>`
+            SELECT COUNT(*) AS count FROM entities
+          `;
+        return Number(rows[0]?.count ?? 0);
+      });
+
     return {
       findById,
       findByName,
@@ -235,6 +243,7 @@ EntityRepository.Default = Layer.effect(
       listAliases,
       searchByName,
       deleteEntity,
+      count,
     };
   }),
 );

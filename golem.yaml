@@ -54,6 +54,62 @@ components:
       embedding:
         api_base: "{{ EMBEDDING_API_BASE }}"
         model: "{{ EMBEDDING_MODEL }}"
+      extraction:
+        dictionary:
+          golem: "Golem Cloud"
+          golem cloud: "Golem Cloud"
+          effect: "Effect-TS"
+          typescript: "TypeScript"
+          postgresql: "PostgreSQL"
+          postgres: "PostgreSQL"
+          pgvector: "pgvector"
+          docker: "Docker"
+          rustfs: "RustFS"
+          ollama: "Ollama"
+          s3: "Amazon S3"
+          aws: "Amazon Web Services"
+          wasm: "WebAssembly"
+          webassembly: "WebAssembly"
+          quickjs: "QuickJS"
+          hnsw: "HNSW Index"
+          rrf: "Reciprocal Rank Fusion"
+          graphrag: "GraphRAG"
+        relationPatterns:
+          - relation: "DEPENDS_ON"
+            confidence: 0.85
+            phrases:
+              - "depends on"
+              - "requires"
+              - "relies on"
+              - "uses"
+              - "utilizes"
+              - "leverages"
+          - relation: "AUTHORED_BY"
+            confidence: 0.90
+            phrases:
+              - "authored by"
+              - "written by"
+              - "created by"
+          - relation: "PART_OF"
+            confidence: 0.85
+            phrases:
+              - "is part of"
+              - "belongs to"
+              - "member of"
+          - relation: "RELATES_TO"
+            confidence: 0.80
+            phrases:
+              - "contains"
+              - "includes"
+              - "references"
+              - "mentions"
+              - "points to"
+              - "relates to"
+        stopwords:
+          - "Table Of"
+          - "The Following"
+          - "For Example"
+          - "In Addition"
 
 httpApi:
   deployments:

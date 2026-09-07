@@ -413,6 +413,14 @@ GraphRepository.Default = Layer.effect(
         return Number(affected) > 0;
       });
 
+    const countEdges = () =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ count: string | number }>`
+            SELECT COUNT(*) AS count FROM edges
+          `;
+        return Number(rows[0]?.count ?? 0);
+      });
+
     return {
       upsertEdge,
       findEdge,
@@ -421,6 +429,7 @@ GraphRepository.Default = Layer.effect(
       getNeighborhood,
       findPaths,
       deleteEdge,
+      countEdges,
     };
   }),
 );

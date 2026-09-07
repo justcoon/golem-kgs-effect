@@ -1,8 +1,8 @@
-import { Effect, Redacted, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { defineAgent, Http, method } from "@golemcloud/effect-golem";
-import { createPostgresClient } from "../storage/database-client.js";
 import {
   AnswerResponseSchema,
+  DocumentResultSchema,
   EntityResultSchema,
   GraphRAGContextBundleSchema,
   KnowledgeBaseOverviewSchema,
@@ -14,20 +14,14 @@ import {
 } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import {
+  CheckpointRepository,
   ChunkRepository,
+  DocumentRepository,
   EntityRepository,
   GraphRepository,
 } from "../storage/index.js";
 import { EmbeddingService, GraphRAGService } from "../pipeline/index.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
-
-interface CountRow {
-  readonly count: bigint | number | string;
-}
-
-interface SyncRow {
-  readonly last_sync: Date | string | null;
-}
 
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
@@ -70,6 +64,14 @@ export const KnowledgeAccessAgent = defineAgent({
       success: Schema.NullOr(EntityResultSchema),
       description: "Finds an entity by exact ID",
       http: [Http.get("/entities/{id}")],
+    }),
+    getDocument: method({
+      params: {
+        id: Schema.String,
+      },
+      success: Schema.NullOr(DocumentResultSchema),
+      description: "Retrieves raw document content and metadata by ID",
+      http: [Http.get("/documents/{id}")],
     }),
     graphRag: method({
       params: {
@@ -122,20 +124,7 @@ export const KnowledgeAccessAgent = defineAgent({
 }).implement(() =>
   Effect.gen(function* () {
     const config = yield* AppAgentConfig;
-    const sql = yield* createPostgresClient(config);
-
-    const api_base = yield* config.embedding.api_base;
-    const model = yield* config.embedding.model;
-    const apiKey = yield* config.embedding.apiKey.get;
-
-    const resourcesVal = Redacted.value(yield* config.resources.get);
-    const s3Targets = resourcesVal?.s3 ?? {};
-
-    const pipelineLayer = makeAgentPipelineLayer({
-      sql,
-      embeddingConfig: { api_base, model, apiKey },
-      s3Targets,
-    });
+    const pipelineLayer = yield* makeAgentPipelineLayer(config);
 
     return {
       search: ({ query, limit = 10, searchType = "hybrid" }) =>
@@ -214,6 +203,28 @@ export const KnowledgeAccessAgent = defineAgent({
             description: entity.description ?? null,
             properties: entity.properties,
             metadata: entity.metadata,
+          };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      getDocument: ({ id }) =>
+        Effect.gen(function* () {
+          const docRepo = yield* DocumentRepository;
+          const opt = yield* docRepo.findDocumentById(id);
+          if (opt._tag === "None") {
+            return null;
+          }
+          const doc = opt.value;
+          return {
+            id: doc.id,
+            title: doc.title,
+            content: doc.content,
+            metadata: doc.metadata,
+            tags: doc.tags,
+            source: doc.source,
+            namespace: doc.namespace,
+            sizeBytes: doc.sizeBytes,
+            createdAt: new Date(doc.createdAt).toISOString(),
+            updatedAt: new Date(doc.updatedAt).toISOString(),
           };
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
@@ -389,38 +400,34 @@ export const KnowledgeAccessAgent = defineAgent({
 
       getOverview: () =>
         Effect.gen(function* () {
-          const docRows = (yield* sql<CountRow>`
-            SELECT COUNT(*) AS count FROM documents
-          `) as ReadonlyArray<CountRow>;
+          const docRepo = yield* DocumentRepository;
+          const chunkRepo = yield* ChunkRepository;
+          const entityRepo = yield* EntityRepository;
+          const graphRepo = yield* GraphRepository;
+          const checkpointRepo = yield* CheckpointRepository;
 
-          const chunkRows = (yield* sql<CountRow>`
-            SELECT COUNT(*) AS count FROM chunks
-          `) as ReadonlyArray<CountRow>;
+          const [
+            totalDocuments,
+            totalChunks,
+            totalEntities,
+            totalRelationships,
+            lastSyncOpt,
+          ] = yield* Effect.all(
+            [
+              docRepo.count(),
+              chunkRepo.count(),
+              entityRepo.count(),
+              graphRepo.countEdges(),
+              checkpointRepo.getLatestSyncTime(),
+            ],
+            { concurrency: 5 },
+          );
 
-          const entityRows = (yield* sql<CountRow>`
-            SELECT COUNT(*) AS count FROM entities
-          `) as ReadonlyArray<CountRow>;
-
-          const edgeRows = (yield* sql<CountRow>`
-            SELECT COUNT(*) AS count FROM edges
-          `) as ReadonlyArray<CountRow>;
-
-          const syncRows = (yield* sql<SyncRow>`
-            SELECT MAX(last_sync_time) AS last_sync FROM sync_checkpoints
-          `) as ReadonlyArray<SyncRow>;
-
-          const totalDocuments = Number(docRows[0]?.count ?? 0);
-          const totalChunks = Number(chunkRows[0]?.count ?? 0);
-          const totalEntities = Number(entityRows[0]?.count ?? 0);
-          const totalRelationships = Number(edgeRows[0]?.count ?? 0);
-
-          const rawSync = syncRows[0]?.last_sync;
-          const lastSynchronizedAt = rawSync
-            ? new Date(rawSync).toISOString()
+          const lastSynchronizedAt = Option.isSome(lastSyncOpt)
+            ? lastSyncOpt.value.toISOString()
             : null;
 
-          const supportedSources =
-            Object.keys(s3Targets).length > 0 ? ["s3"] : ["s3"];
+          const supportedSources = ["s3"];
 
           return {
             totalDocuments,

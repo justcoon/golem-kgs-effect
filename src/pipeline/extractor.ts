@@ -10,6 +10,14 @@ import {
 } from "../domain/relationship.js";
 import { type CreateChunkInput } from "../domain/chunk.js";
 
+import { type RelationPatternRule } from "../config/schema.js";
+
+export interface ExtractionRules {
+  readonly dictionary?: Record<string, string> | ReadonlyMap<string, string>;
+  readonly relationPatterns?: ReadonlyArray<RelationPatternRule>;
+  readonly stopwords?: ReadonlyArray<string>;
+}
+
 export interface ExtractedKnowledge {
   readonly chunkIndex: number;
   readonly documentId: string;
@@ -38,33 +46,16 @@ function slugify(text: string): string {
     .slice(0, 50);
 }
 
-// Common technology dictionary for high-precision recognition
-const KNOWN_TECHNOLOGIES = new Map<string, string>([
-  ["golem", "Golem Cloud"],
-  ["golem cloud", "Golem Cloud"],
-  ["effect", "Effect-TS"],
-  ["typescript", "TypeScript"],
-  ["postgresql", "PostgreSQL"],
-  ["postgres", "PostgreSQL"],
-  ["pgvector", "pgvector"],
-  ["docker", "Docker"],
-  ["rustfs", "RustFS"],
-  ["ollama", "Ollama"],
-  ["s3", "Amazon S3"],
-  ["aws", "Amazon Web Services"],
-  ["wasm", "WebAssembly"],
-  ["webassembly", "WebAssembly"],
-  ["quickjs", "QuickJS"],
-  ["hnsw", "HNSW Index"],
-  ["rrf", "Reciprocal Rank Fusion"],
-  ["graphrag", "GraphRAG"],
-]);
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 export class EntityExtractor {
   static extract(
     text: string,
     documentId: string,
     chunkIndex = 0,
+    rules?: ExtractionRules,
   ): ExtractedKnowledge {
     const entitiesMap = new Map<string, CreateEntityInput>();
     const aliasesList: EntityAlias[] = [];
@@ -121,26 +112,39 @@ export class EntityExtractor {
       }
     }
 
-    // 2. Known Technology Match
+    // 2. Dictionary-based Entity Recognition
     const lowerText = text.toLowerCase();
-    for (const [kw, canonical] of KNOWN_TECHNOLOGIES.entries()) {
-      const regex = new RegExp(`\\b${kw}\\b`, "i");
+    const dictionary = rules?.dictionary ?? {};
+    const dictEntries =
+      dictionary instanceof Map
+        ? dictionary.entries()
+        : Object.entries(dictionary);
+    for (const [kw, canonical] of dictEntries) {
+      const regex = new RegExp(`\\b${escapeRegex(kw)}\\b`, "i");
       if (regex.test(lowerText)) {
-        addEntity(canonical, "TECHNOLOGY", 0.9);
+        const entId = addEntity(canonical, "TECHNOLOGY", 0.9);
+        if (kw.toLowerCase() !== canonical.toLowerCase()) {
+          aliasesList.push({
+            alias: kw,
+            entityId: entId,
+            source: "dictionary",
+            confidence: 0.9,
+          });
+        }
       }
     }
 
-    // 3. Multi-word Title Case Entities (e.g. "Durable Execution Engine", "Storage Substrate")
+    // 3. Multi-word Title Case Entities
+    const stopwordsList = rules?.stopwords ?? [];
+    const stopwords = new Set(stopwordsList.map((s) => s.toLowerCase()));
     const properNounRegex = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b/g;
     while ((match = properNounRegex.exec(text)) !== null) {
       const phrase = match[1]?.trim();
-      if (
-        phrase &&
-        !["Table Of", "The Following", "For Example", "In Addition"].includes(
-          phrase,
-        )
-      ) {
-        addEntity(phrase, "CONCEPT", 0.75);
+      if (phrase && !stopwords.has(phrase.toLowerCase())) {
+        const cleanPhrase = phrase.replace(/^(the|a|an)\s+/i, "").trim();
+        if (cleanPhrase && !stopwords.has(cleanPhrase.toLowerCase())) {
+          addEntity(cleanPhrase, "CONCEPT", 0.75);
+        }
       }
     }
 
@@ -157,56 +161,40 @@ export class EntityExtractor {
     // 5. Relational Pattern Detection
     const detectedEntities = Array.from(entitiesMap.values());
     if (detectedEntities.length >= 2) {
-      const relationPatterns: {
-        regex: RegExp;
-        relation: RelationType;
-        confidence: number;
-      }[] = [
-        {
-          regex:
-            /([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+(?:depends on|requires|relies on|uses|utilizes|leverages)\s+([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})/i,
-          relation: "DEPENDS_ON",
-          confidence: 0.85,
-        },
-        {
-          regex:
-            /([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+(?:authored by|written by|created by)\s+([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})/i,
-          relation: "AUTHORED_BY",
-          confidence: 0.9,
-        },
-        {
-          regex:
-            /([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+(?:is part of|belongs to|member of)\s+([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})/i,
-          relation: "PART_OF",
-          confidence: 0.85,
-        },
-        {
-          regex:
-            /([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})\s+(?:contains|includes|references|mentions|points to|relates to)\s+([A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){0,2})/i,
-          relation: "RELATES_TO",
-          confidence: 0.8,
-        },
-      ];
+      const configuredPatterns = rules?.relationPatterns ?? [];
 
-      for (const pattern of relationPatterns) {
+      const matchesEntity = (e: CreateEntityInput, raw: string) => {
+        const name = e.name.toLowerCase();
+        if (raw.includes(name) || name.includes(raw)) return true;
+        return aliasesList.some(
+          (a) =>
+            a.entityId === e.id &&
+            (raw.includes(a.alias.toLowerCase()) ||
+              a.alias.toLowerCase().includes(raw)),
+        );
+      };
+
+      for (const pattern of configuredPatterns) {
+        if (!pattern.phrases || pattern.phrases.length === 0) continue;
+        const escapedPhrases = pattern.phrases.map(escapeRegex).join("|");
+        const globalRegex = new RegExp(
+          `([A-Za-z0-9_.-]+(?:\\s+[A-Za-z0-9_.-]+){0,2})\\s+(?:${escapedPhrases})\\s+([A-Za-z0-9_.-]+(?:\\s+[A-Za-z0-9_.-]+){0,2})`,
+          "gi",
+        );
+
         let relMatch: RegExpExecArray | null;
-        const globalRegex = new RegExp(pattern.regex.source, "gi");
         while ((relMatch = globalRegex.exec(text)) !== null) {
           const subjectRaw = (relMatch[1] ?? "").trim().toLowerCase();
           const objectRaw = (relMatch[2] ?? "").trim().toLowerCase();
 
           if (!subjectRaw || !objectRaw) continue;
 
-          // Find candidate match among detected entities
-          const sourceEntity = detectedEntities.find(
-            (e) =>
-              subjectRaw.includes(e.name.toLowerCase()) ||
-              e.name.toLowerCase().includes(subjectRaw),
+          // Find candidate match among detected entities and aliases
+          const sourceEntity = detectedEntities.find((e) =>
+            matchesEntity(e, subjectRaw),
           );
-          const targetEntity = detectedEntities.find(
-            (e) =>
-              objectRaw.includes(e.name.toLowerCase()) ||
-              e.name.toLowerCase().includes(objectRaw),
+          const targetEntity = detectedEntities.find((e) =>
+            matchesEntity(e, objectRaw),
           );
 
           if (
@@ -214,16 +202,17 @@ export class EntityExtractor {
             targetEntity &&
             sourceEntity.id !== targetEntity.id
           ) {
-            const edgeId = `edge_${sourceEntity.id}_${pattern.relation.toLowerCase()}_${targetEntity.id}`;
+            const relType = pattern.relation as RelationType;
+            const edgeId = `edge_${sourceEntity.id}_${relType.toLowerCase()}_${targetEntity.id}`;
             edgesList.push({
               id: edgeId,
               sourceId: sourceEntity.id,
               targetId: targetEntity.id,
-              relationType: pattern.relation,
+              relationType: relType,
               weight: 1.0,
-              confidence: pattern.confidence,
+              confidence: pattern.confidence ?? 0.85,
               properties: {
-                extractedPattern: pattern.relation,
+                extractedPattern: relType,
                 documentId,
                 chunkIndex,
               },
@@ -247,17 +236,23 @@ export class ExtractionService extends Context.Service<
   ExtractionService,
   ExtractionServiceShape
 >()("app/pipeline/ExtractionService") {
-  static readonly Default = Layer.succeed(ExtractionService, {
-    extractFromText: (text: string, documentId: string, chunkIndex = 0) =>
-      Effect.sync(() => EntityExtractor.extract(text, documentId, chunkIndex)),
-
-    extractFromChunk: (chunk: CreateChunkInput) =>
-      Effect.sync(() =>
-        EntityExtractor.extract(
-          chunk.content,
-          chunk.documentId,
-          chunk.chunkIndex,
+  static readonly make = (rules?: ExtractionRules) =>
+    Layer.succeed(ExtractionService, {
+      extractFromText: (text: string, documentId: string, chunkIndex = 0) =>
+        Effect.sync(() =>
+          EntityExtractor.extract(text, documentId, chunkIndex, rules),
         ),
-      ),
-  });
+
+      extractFromChunk: (chunk: CreateChunkInput) =>
+        Effect.sync(() =>
+          EntityExtractor.extract(
+            chunk.content,
+            chunk.documentId,
+            chunk.chunkIndex,
+            rules,
+          ),
+        ),
+    });
+
+  static readonly Default = ExtractionService.make();
 }

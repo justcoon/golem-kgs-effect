@@ -1,4 +1,4 @@
-import { Effect, Redacted, Ref, Schema } from "effect";
+import { Effect, Ref, Schema } from "effect";
 import {
   defineAgent,
   Http,
@@ -6,7 +6,6 @@ import {
   Snapshot,
   Webhook,
 } from "@golemcloud/effect-golem";
-import { createPostgresClient } from "../storage/database-client.js";
 import { BatchJobCallbackResultSchema, S3TaskStateSchema } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
@@ -62,20 +61,7 @@ export const S3IngestorTaskAgent = defineAgent({
 }).implement(({ resourceName }, snapshot) =>
   Effect.gen(function* () {
     const config = yield* AppAgentConfig;
-    const sql = yield* createPostgresClient(config);
-
-    const api_base = yield* config.embedding.api_base;
-    const model = yield* config.embedding.model;
-    const apiKey = yield* config.embedding.apiKey.get;
-
-    const resourcesVal = Redacted.value(yield* config.resources.get);
-    const s3Targets = resourcesVal?.s3 ?? {};
-
-    const pipelineLayer = makeAgentPipelineLayer({
-      sql,
-      embeddingConfig: { api_base, model, apiKey },
-      s3Targets,
-    });
+    const pipelineLayer = yield* makeAgentPipelineLayer(config);
 
     const state = yield* snapshot.init({
       resourceName,

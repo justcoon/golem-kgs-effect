@@ -571,6 +571,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
             metadata: {},
           },
         ]),
+      count: () => Effect.succeed(1),
     };
 
     const mockEntityRepo: EntityRepositoryShape = {
@@ -599,6 +600,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
           ),
         ),
       deleteEntity: () => Effect.succeed(true),
+      count: () => Effect.succeed(mockEntities.size),
     };
 
     const mockGraphRepo: GraphRepositoryShape = {
@@ -615,6 +617,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
         })),
       findPaths: () => Effect.die("not implemented"),
       deleteEdge: () => Effect.succeed(true),
+      countEdges: () => Effect.succeed(mockEdges.length),
     };
 
     it("should retrieve context bundle with chunks, expanded entities, and formatted prompt", async () => {
