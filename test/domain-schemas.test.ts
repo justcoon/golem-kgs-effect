@@ -9,6 +9,7 @@ import {
 } from "../src/domain/entity.js";
 import {
   CreateEdgeInput,
+  DefaultRelationTypes,
   Edge,
   RelationType,
 } from "../src/domain/relationship.js";
@@ -127,11 +128,13 @@ describe("Domain Schemas", () => {
       assert.equal(input.properties, undefined);
     });
 
-    it("should validate RelationType literals", () => {
+    it("should validate RelationType strings and default types", () => {
       assert.equal(Schema.decodeUnknownSync(RelationType)("OWNS"), "OWNS");
-      assert.throws(() =>
-        Schema.decodeUnknownSync(RelationType)("INVALID_REL"),
+      assert.equal(
+        Schema.decodeUnknownSync(RelationType)("CUSTOM_RELATION"),
+        "CUSTOM_RELATION",
       );
+      assert.ok(DefaultRelationTypes.includes("CO_OCCURS_WITH"));
     });
   });
 

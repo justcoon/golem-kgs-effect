@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Effect, Redacted, Schema } from "effect";
 import {
+  CooccurrenceConfigSchema,
   EmbeddingConfigSchema,
   ExtractionConfigSchema,
   RelationPatternRuleSchema,
@@ -310,15 +311,33 @@ Lexical full-text search indexes provide keyword recall.
       assert.equal(parsedRule.relation, "MANAGES");
       assert.equal(parsedRule.confidence, 0.88);
 
+      const parsedCooccurrence = Schema.decodeUnknownSync(
+        CooccurrenceConfigSchema,
+      )({
+        enabled: true,
+        window: "sentence",
+        confidence: 0.75,
+        relation: "CO_OCCURS_WITH",
+        maxEdgesPerChunk: 25,
+      });
+      assert.equal(parsedCooccurrence.enabled, true);
+      assert.equal(parsedCooccurrence.window, "sentence");
+      assert.equal(parsedCooccurrence.confidence, 0.75);
+      assert.equal(parsedCooccurrence.relation, "CO_OCCURS_WITH");
+      assert.equal(parsedCooccurrence.maxEdgesPerChunk, 25);
+
       const parsedConfig = Schema.decodeUnknownSync(ExtractionConfigSchema)({
         dictionary: [{ alias: "k8s", canonical: "Kubernetes" }],
         relationPatterns: [parsedRule],
         stopwords: ["Notice"],
+        cooccurrence: parsedCooccurrence,
       });
       assert.equal(parsedConfig.dictionary?.[0]?.alias, "k8s");
       assert.equal(parsedConfig.dictionary?.[0]?.canonical, "Kubernetes");
       assert.equal(parsedConfig.relationPatterns?.length, 1);
       assert.equal(parsedConfig.stopwords?.[0], "Notice");
+      assert.equal(parsedConfig.cooccurrence?.enabled, true);
+      assert.equal(parsedConfig.cooccurrence?.relation, "CO_OCCURS_WITH");
     });
   });
 

@@ -81,10 +81,20 @@ export const DictionaryEntrySchema = Schema.Struct({
 });
 export type DictionaryEntry = typeof DictionaryEntrySchema.Type;
 
+export const CooccurrenceConfigSchema = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  window: Schema.optional(Schema.Literals(["sentence", "chunk"])),
+  confidence: Schema.optional(Schema.Number),
+  relation: Schema.optional(Schema.String),
+  maxEdgesPerChunk: Schema.optional(Schema.Number),
+});
+export type CooccurrenceConfig = typeof CooccurrenceConfigSchema.Type;
+
 export const ExtractionConfigSchema = Schema.Struct({
   dictionary: Schema.optional(Schema.Array(DictionaryEntrySchema)),
   relationPatterns: Schema.optional(Schema.Array(RelationPatternRuleSchema)),
   stopwords: Schema.optional(Schema.Array(Schema.String)),
+  cooccurrence: Schema.optional(CooccurrenceConfigSchema),
 });
 export type ExtractionConfig = typeof ExtractionConfigSchema.Type;
 

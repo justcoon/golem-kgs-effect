@@ -11,6 +11,7 @@ import {
 import { type CreateChunkInput } from "../domain/chunk.js";
 
 import {
+  type CooccurrenceConfig,
   type DictionaryEntry,
   type RelationPatternRule,
 } from "../config/schema.js";
@@ -22,6 +23,7 @@ export interface ExtractionRules {
     | ReadonlyArray<DictionaryEntry>;
   readonly relationPatterns?: ReadonlyArray<RelationPatternRule>;
   readonly stopwords?: ReadonlyArray<string>;
+  readonly cooccurrence?: CooccurrenceConfig;
 }
 
 export interface ExtractedKnowledge {
@@ -56,6 +58,44 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function findEntityFirstIndex(
+  entity: CreateEntityInput,
+  aliases: ReadonlyArray<EntityAlias>,
+  windowText: string,
+): number {
+  const lowerWindow = windowText.toLowerCase();
+  const searchTerms = [
+    entity.name,
+    ...aliases.filter((a) => a.entityId === entity.id).map((a) => a.alias),
+  ];
+  let minIndex = -1;
+
+  for (const term of searchTerms) {
+    if (!term || term.trim().length === 0) continue;
+    const lowerTerm = term.toLowerCase().trim();
+    const isAlphanumeric =
+      /^[a-z0-9]/i.test(lowerTerm) && /[a-z0-9]$/i.test(lowerTerm);
+    if (isAlphanumeric) {
+      const regex = new RegExp(`\\b${escapeRegex(lowerTerm)}\\b`, "i");
+      const match = regex.exec(lowerWindow);
+      if (match) {
+        if (minIndex === -1 || match.index < minIndex) {
+          minIndex = match.index;
+        }
+      }
+    } else {
+      const idx = lowerWindow.indexOf(lowerTerm);
+      if (idx !== -1) {
+        if (minIndex === -1 || idx < minIndex) {
+          minIndex = idx;
+        }
+      }
+    }
+  }
+
+  return minIndex;
+}
+
 export class EntityExtractor {
   static extract(
     text: string,
@@ -75,22 +115,29 @@ export class EntityExtractor {
       description?: string,
     ): string => {
       const canonicalName = name.trim();
-      const entityId = `ent_${type.toLowerCase()}_${slugify(canonicalName)}`;
-      if (!entitiesMap.has(entityId)) {
-        entitiesMap.set(entityId, {
-          id: entityId,
-          name: canonicalName,
-          entityType: type,
-          description: description ?? `Extracted from ${documentId}`,
-          properties: {
-            extractedFromDocument: documentId,
-            chunkIndex,
-          },
-          metadata: {
-            confidence,
-          },
-        });
+      const slug = slugify(canonicalName);
+
+      // Check if an entity with this slug already exists across any entity type
+      for (const existing of entitiesMap.values()) {
+        if (slugify(existing.name) === slug) {
+          return existing.id;
+        }
       }
+
+      const entityId = `ent_${type.toLowerCase()}_${slug}`;
+      entitiesMap.set(entityId, {
+        id: entityId,
+        name: canonicalName,
+        entityType: type,
+        description: description ?? `Extracted from ${documentId}`,
+        properties: {
+          extractedFromDocument: documentId,
+          chunkIndex,
+        },
+        metadata: {
+          confidence,
+        },
+      });
       return entityId;
     };
 
@@ -127,10 +174,13 @@ export class EntityExtractor {
         ? Array.from(dictionary.entries())
         : Object.entries(dictionary);
     for (const [kw, canonical] of dictEntries) {
-      const regex = new RegExp(`\\b${escapeRegex(kw)}\\b`, "i");
-      if (regex.test(lowerText)) {
+      const kwRegex = new RegExp(`\\b${escapeRegex(kw)}\\b`, "i");
+      const canonicalRegex = new RegExp(`\\b${escapeRegex(canonical)}\\b`, "i");
+      const kwMatched = kwRegex.test(lowerText);
+      const canonicalMatched = canonicalRegex.test(lowerText);
+      if (kwMatched || canonicalMatched) {
         const entId = addEntity(canonical, "TECHNOLOGY", 0.9);
-        if (kw.toLowerCase() !== canonical.toLowerCase()) {
+        if (kwMatched && kw.toLowerCase() !== canonical.toLowerCase()) {
           aliasesList.push({
             alias: kw,
             entityId: entId,
@@ -224,6 +274,81 @@ export class EntityExtractor {
                 chunkIndex,
               },
             });
+          }
+        }
+      }
+    }
+
+    // 6. Co-occurrence Edge Extraction
+    if (rules?.cooccurrence?.enabled && detectedEntities.length >= 2) {
+      const windowMode = rules.cooccurrence.window ?? "sentence";
+      const relationType = (rules.cooccurrence.relation ??
+        "CO_OCCURS_WITH") as RelationType;
+      const confidence = rules.cooccurrence.confidence ?? 0.75;
+      const maxEdges = rules.cooccurrence.maxEdgesPerChunk ?? 25;
+
+      const windows =
+        windowMode === "chunk"
+          ? [text]
+          : text
+              .split(/(?<=[.!?])\s+|\n+/)
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+
+      const seenPairs = new Set<string>();
+      let cooccurrenceCount = 0;
+
+      for (const win of windows) {
+        if (cooccurrenceCount >= maxEdges) break;
+
+        const entitiesInWindow: Array<{
+          entity: CreateEntityInput;
+          pos: number;
+        }> = [];
+
+        for (const ent of detectedEntities) {
+          const pos = findEntityFirstIndex(ent, aliasesList, win);
+          if (pos !== -1) {
+            entitiesInWindow.push({ entity: ent, pos });
+          }
+        }
+
+        if (entitiesInWindow.length < 2) continue;
+
+        entitiesInWindow.sort((a, b) => a.pos - b.pos);
+
+        for (let i = 0; i < entitiesInWindow.length; i++) {
+          for (let j = i + 1; j < entitiesInWindow.length; j++) {
+            if (cooccurrenceCount >= maxEdges) break;
+
+            const itemI = entitiesInWindow[i];
+            const itemJ = entitiesInWindow[j];
+            if (!itemI || !itemJ) continue;
+
+            const first = itemI.entity;
+            const second = itemJ.entity;
+            if (first.id === second.id) continue;
+
+            const pairKey = [first.id, second.id].sort().join("<->");
+            if (seenPairs.has(pairKey)) continue;
+            seenPairs.add(pairKey);
+
+            const edgeId = `edge_${first.id}_${relationType.toLowerCase()}_${second.id}`;
+            edgesList.push({
+              id: edgeId,
+              sourceId: first.id,
+              targetId: second.id,
+              relationType,
+              weight: 1.0,
+              confidence,
+              properties: {
+                extractedPattern: "CO_OCCURRENCE",
+                documentId,
+                chunkIndex,
+                window: windowMode,
+              },
+            });
+            cooccurrenceCount++;
           }
         }
       }

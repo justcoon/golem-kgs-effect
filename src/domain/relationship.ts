@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-export const RelationType = Schema.Literals([
+export const DefaultRelationTypes = [
   "AUTHORED_BY",
   "DEPENDS_ON",
   "PART_OF",
@@ -9,7 +9,10 @@ export const RelationType = Schema.Literals([
   "RELATES_TO",
   "MEMBER_OF",
   "MENTIONS",
-]);
+  "CO_OCCURS_WITH",
+] as const;
+
+export const RelationType = Schema.String;
 export type RelationType = typeof RelationType.Type;
 
 export const EdgeDirection = Schema.Literals(["OUTBOUND", "INBOUND", "BOTH"]);

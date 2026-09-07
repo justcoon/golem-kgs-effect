@@ -55,9 +55,18 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
       const resourceNames = inner.s3.map((r) => r.name);
 
       assert.deepEqual(resourceNames, ["main", "legal", "technical"]);
-      assert.equal(inner.s3.find((r) => r.name === "main")?.bucket, "golem-documents");
-      assert.equal(inner.s3.find((r) => r.name === "legal")?.bucket, "legal-docs");
-      assert.equal(inner.s3.find((r) => r.name === "technical")?.bucket, "technical-docs");
+      assert.equal(
+        inner.s3.find((r) => r.name === "main")?.bucket,
+        "golem-documents",
+      );
+      assert.equal(
+        inner.s3.find((r) => r.name === "legal")?.bucket,
+        "legal-docs",
+      );
+      assert.equal(
+        inner.s3.find((r) => r.name === "technical")?.bucket,
+        "technical-docs",
+      );
     });
 
     it("should validate a single S3ResourceTarget", () => {

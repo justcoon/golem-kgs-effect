@@ -54,6 +54,12 @@ components:
         api_base: "{{ EMBEDDING_API_BASE }}"
         model: "{{ EMBEDDING_MODEL }}"
       extraction:
+        cooccurrence:
+          enabled: true
+          window: "sentence"
+          confidence: 0.75
+          relation: "CO_OCCURS_WITH"
+          maxEdgesPerChunk: 25
         dictionary:
           - alias: "golem"
             canonical: "Golem Cloud"
