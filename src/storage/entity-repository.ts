@@ -223,7 +223,7 @@ EntityRepository.Default = Layer.effect(
             FROM entities e
             LEFT JOIN edges ed ON (e.id = ed.source_id OR e.id = ed.target_id)
             GROUP BY e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
-            ORDER BY COUNT(ed.id) DESC, e.updated_at DESC
+            ORDER BY COUNT(ed.source_id) DESC, e.updated_at DESC
             LIMIT ${limit}
           `) as ReadonlyArray<EntityRow>;
 

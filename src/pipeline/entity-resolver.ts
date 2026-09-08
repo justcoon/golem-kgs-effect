@@ -165,7 +165,6 @@ export class EntityResolverService extends Context.Service<
               const newWeight = existing.weight + (edgeInput.weight ?? 1.0);
 
               const merged = yield* graphRepo.upsertEdge({
-                id: existing.id,
                 sourceId,
                 targetId,
                 relationType: edgeInput.relationType,

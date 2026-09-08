@@ -10,21 +10,17 @@ import {
 } from "../domain/query.js";
 
 interface EdgeRow {
-  readonly id: string;
   readonly source_id: string;
   readonly target_id: string;
   readonly relation_type: string;
   readonly weight: number;
   readonly confidence: number;
   readonly properties: unknown;
-  readonly valid_from: Date | string | null;
-  readonly valid_until: Date | string | null;
   readonly created_at: Date | string;
   readonly updated_at: Date | string;
 }
 
 const mapEdgeRow = (row: EdgeRow): Edge => ({
-  id: row.id,
   sourceId: row.source_id,
   targetId: row.target_id,
   relationType: row.relation_type,
@@ -34,8 +30,6 @@ const mapEdgeRow = (row: EdgeRow): Edge => ({
     typeof row.properties === "string"
       ? JSON.parse(row.properties)
       : ((row.properties as Record<string, unknown>) ?? {}),
-  validFrom: row.valid_from ? new Date(row.valid_from) : null,
-  validUntil: row.valid_until ? new Date(row.valid_until) : null,
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
 });
@@ -53,26 +47,19 @@ GraphRepository.Default = Layer.effect(
 
     const upsertEdge = (input: CreateEdgeInput) =>
       Effect.gen(function* () {
-        const edgeId =
-          input.id ??
-          `edge_${input.sourceId}_${input.relationType}_${input.targetId}`;
         const props = Pg.jsonb(input.properties ?? {});
         const weight = input.weight ?? 1.0;
         const confidence = input.confidence ?? 1.0;
-        const validFrom = input.validFrom ? new Date(input.validFrom) : null;
-        const validUntil = input.validUntil ? new Date(input.validUntil) : null;
 
         const rows = (yield* sql<EdgeRow>`
-            INSERT INTO edges (id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, updated_at)
-            VALUES (${edgeId}, ${input.sourceId}, ${input.targetId}, ${input.relationType}, ${weight}, ${confidence}, ${props}, ${validFrom}, ${validUntil}, NOW())
+            INSERT INTO edges (source_id, target_id, relation_type, weight, confidence, properties, updated_at)
+            VALUES (${input.sourceId}, ${input.targetId}, ${input.relationType}, ${weight}, ${confidence}, ${props}, NOW())
             ON CONFLICT (source_id, target_id, relation_type) DO UPDATE SET
               weight = EXCLUDED.weight,
               confidence = EXCLUDED.confidence,
               properties = edges.properties || EXCLUDED.properties,
-              valid_from = EXCLUDED.valid_from,
-              valid_until = EXCLUDED.valid_until,
               updated_at = NOW()
-            RETURNING id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+            RETURNING source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
           `) as ReadonlyArray<EdgeRow>;
 
         const row = rows[0];
@@ -89,7 +76,7 @@ GraphRepository.Default = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const rows = (yield* sql<EdgeRow>`
-            SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+            SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
             FROM edges
             WHERE source_id = ${sourceId} AND target_id = ${targetId} AND relation_type = ${relationType}
             LIMIT 1
@@ -104,12 +91,12 @@ GraphRepository.Default = Layer.effect(
         const rows = (
           relationType
             ? yield* sql<EdgeRow>`
-                  SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                  SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                   FROM edges
                   WHERE source_id = ${sourceId} AND relation_type = ${relationType}
                 `
             : yield* sql<EdgeRow>`
-                  SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                  SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                   FROM edges
                   WHERE source_id = ${sourceId}
                 `
@@ -123,12 +110,12 @@ GraphRepository.Default = Layer.effect(
         const rows = (
           relationType
             ? yield* sql<EdgeRow>`
-                  SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                  SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                   FROM edges
                   WHERE target_id = ${targetId} AND relation_type = ${relationType}
                 `
             : yield* sql<EdgeRow>`
-                  SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                  SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                   FROM edges
                   WHERE target_id = ${targetId}
                 `
@@ -154,7 +141,7 @@ GraphRepository.Default = Layer.effect(
         if (direction === "OUTBOUND") {
           return hasTypes
             ? ((yield* sql<EdgeRow>`
-                SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE source_id = ANY(${frontierParam})
                   AND relation_type = ANY(${typesParam})
@@ -163,7 +150,7 @@ GraphRepository.Default = Layer.effect(
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>)
             : ((yield* sql<EdgeRow>`
-                SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE source_id = ANY(${frontierParam})
                   AND confidence >= ${minConfidence}
@@ -173,7 +160,7 @@ GraphRepository.Default = Layer.effect(
         } else if (direction === "INBOUND") {
           return hasTypes
             ? ((yield* sql<EdgeRow>`
-                SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE target_id = ANY(${frontierParam})
                   AND relation_type = ANY(${typesParam})
@@ -182,7 +169,7 @@ GraphRepository.Default = Layer.effect(
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>)
             : ((yield* sql<EdgeRow>`
-                SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE target_id = ANY(${frontierParam})
                   AND confidence >= ${minConfidence}
@@ -192,7 +179,7 @@ GraphRepository.Default = Layer.effect(
         } else {
           return hasTypes
             ? ((yield* sql<EdgeRow>`
-                SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam}))
                   AND relation_type = ANY(${typesParam})
@@ -201,7 +188,7 @@ GraphRepository.Default = Layer.effect(
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>)
             : ((yield* sql<EdgeRow>`
-                SELECT id, source_id, target_id, relation_type, weight, confidence, properties, valid_from, valid_until, created_at, updated_at
+                SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam}))
                   AND confidence >= ${minConfidence}
@@ -241,7 +228,10 @@ GraphRepository.Default = Layer.effect(
           const nextFrontier = new Set<string>();
           for (const row of rows) {
             const edge = mapEdgeRow(row);
-            collectedEdges.set(edge.id, edge);
+            collectedEdges.set(
+              `${edge.sourceId}_${edge.relationType}_${edge.targetId}`,
+              edge,
+            );
 
             if (direction === "OUTBOUND") {
               if (!visitedEntityIds.has(edge.targetId)) {
@@ -406,10 +396,15 @@ GraphRepository.Default = Layer.effect(
         return result;
       });
 
-    const deleteEdge = (id: string) =>
+    const deleteEdge = (
+      sourceId: string,
+      targetId: string,
+      relationType: string,
+    ) =>
       Effect.gen(function* () {
         const affected = (yield* sql`
-            DELETE FROM edges WHERE id = ${id}
+            DELETE FROM edges
+            WHERE source_id = ${sourceId} AND target_id = ${targetId} AND relation_type = ${relationType}
           `.raw) as bigint | number;
 
         return Number(affected) > 0;

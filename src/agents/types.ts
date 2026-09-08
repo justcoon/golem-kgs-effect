@@ -164,7 +164,6 @@ export const SearchResponseSchema = Schema.Struct({
 export type SearchResponse = typeof SearchResponseSchema.Type;
 
 export const EdgeResultSchema = Schema.Struct({
-  id: Schema.String,
   sourceId: Schema.String,
   targetId: Schema.String,
   relationType: Schema.String,

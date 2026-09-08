@@ -260,9 +260,7 @@ export class EntityExtractor {
             sourceEntity.id !== targetEntity.id
           ) {
             const relType = pattern.relation as RelationType;
-            const edgeId = `edge_${sourceEntity.id}_${relType.toLowerCase()}_${targetEntity.id}`;
             edgesList.push({
-              id: edgeId,
               sourceId: sourceEntity.id,
               targetId: targetEntity.id,
               relationType: relType,
@@ -333,9 +331,7 @@ export class EntityExtractor {
             if (seenPairs.has(pairKey)) continue;
             seenPairs.add(pairKey);
 
-            const edgeId = `edge_${first.id}_${relationType.toLowerCase()}_${second.id}`;
             edgesList.push({
-              id: edgeId,
               sourceId: first.id,
               targetId: second.id,
               relationType,

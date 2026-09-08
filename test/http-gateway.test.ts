@@ -450,7 +450,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         ],
         edges: [
           {
-            id: "edge_1",
             sourceId: "ent_golem_1",
             targetId: "ent_golem_2",
             relationType: "CONNECTS",

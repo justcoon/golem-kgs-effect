@@ -130,15 +130,12 @@ describe("Domain Schemas", () => {
     it("should parse an Edge", () => {
       const now = new Date();
       const raw = {
-        id: "edge_1",
         sourceId: "ent_person_1",
         targetId: "ent_doc_1",
         relationType: "AUTHORED_BY",
         weight: 1.0,
         confidence: 0.9,
         properties: { role: "lead" },
-        validFrom: null,
-        validUntil: null,
         createdAt: now,
         updatedAt: now,
       };

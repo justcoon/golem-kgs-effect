@@ -41,7 +41,6 @@ export interface EntityResult {
 }
 
 export interface EdgeResult {
-  id: string;
   sourceId: string;
   targetId: string;
   relationType: string;

@@ -212,7 +212,11 @@ export interface GraphRepositoryShape {
   readonly findPaths: (
     query: PathFindingQuery,
   ) => Effect.Effect<PathFindingResult, SqlError>;
-  readonly deleteEdge: (id: string) => Effect.Effect<boolean, SqlError>;
+  readonly deleteEdge: (
+    sourceId: string,
+    targetId: string,
+    relationType: string,
+  ) => Effect.Effect<boolean, SqlError>;
   readonly countEdges: () => Effect.Effect<number, SqlError>;
 }
 

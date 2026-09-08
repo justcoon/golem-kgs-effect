@@ -171,7 +171,7 @@ function handleSelectEntity(entity: EntityResult) {
           <div class="edges-wrap">
             <span
               v-for="edge in response.groundedRelationships"
-              :key="edge.id"
+              :key="`${edge.sourceId}-${edge.relationType}-${edge.targetId}`"
               class="edge-pill"
             >
               <code class="edge-node">{{ edge.sourceId }}</code>

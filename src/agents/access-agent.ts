@@ -291,7 +291,6 @@ export const KnowledgeAccessAgent = defineAgent({
           return {
             entities: Array.from(entities),
             edges: result.edges.map((e) => ({
-              id: e.id,
               sourceId: e.sourceId,
               targetId: e.targetId,
               relationType: e.relationType,
@@ -367,7 +366,6 @@ export const KnowledgeAccessAgent = defineAgent({
               metadata: e.metadata,
             })),
             relationships: bundle.relationships.map((e) => ({
-              id: e.id,
               sourceId: e.sourceId,
               targetId: e.targetId,
               relationType: e.relationType,
@@ -420,7 +418,6 @@ export const KnowledgeAccessAgent = defineAgent({
             paths: result.paths.map((p) => ({
               entityIds: Array.from(p.entityIds),
               edges: p.edges.map((e) => ({
-                id: e.id,
                 sourceId: e.sourceId,
                 targetId: e.targetId,
                 relationType: e.relationType,
@@ -484,7 +481,6 @@ export const KnowledgeAccessAgent = defineAgent({
           }));
 
           const groundedRelationships = bundle.relationships.map((e) => ({
-            id: e.id,
             sourceId: e.sourceId,
             targetId: e.targetId,
             relationType: e.relationType,

@@ -191,7 +191,6 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       assert.equal(parsedSearch.results[0]?.score, 0.95);
 
       const edgeItem = {
-        id: "edge_1",
         sourceId: "ent_golem",
         targetId: "ent_effect",
         relationType: "USES",
@@ -446,15 +445,12 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       upsertEdge: (input: CreateEdgeInput) =>
         Effect.sync(() => {
           const edge: Edge = {
-            id: `edge_${input.sourceId}_${input.targetId}_${input.relationType}`,
             sourceId: input.sourceId,
             targetId: input.targetId,
             relationType: input.relationType,
             weight: input.weight ?? 1.0,
             confidence: input.confidence ?? 0.8,
             properties: input.properties ?? {},
-            validFrom: input.validFrom ?? null,
-            validUntil: input.validUntil ?? null,
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -476,9 +472,14 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       getInboundEdges: (targetId) =>
         Effect.sync(() => savedEdges.filter((e) => e.targetId === targetId)),
       getNeighborhood: () => Effect.succeed({ entityIds: [], edges: [] }),
-      deleteEdge: (id) =>
+      deleteEdge: (sourceId, targetId, relationType) =>
         Effect.sync(() => {
-          const idx = savedEdges.findIndex((e) => e.id === id);
+          const idx = savedEdges.findIndex(
+            (e) =>
+              e.sourceId === sourceId &&
+              e.targetId === targetId &&
+              e.relationType === relationType,
+          );
           if (idx >= 0) {
             savedEdges.splice(idx, 1);
             return true;

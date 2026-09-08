@@ -522,7 +522,10 @@ watch(() => props.initialEntityId, (newId) => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="edge in graphEdges" :key="edge.id">
+            <tr
+              v-for="edge in graphEdges"
+              :key="`${edge.sourceId}-${edge.relationType}-${edge.targetId}`"
+            >
               <td>
                 <button class="table-link-btn" @click="emit('inspect-entity', edge.sourceId)">
                   {{ entityMap.get(edge.sourceId)?.name || edge.sourceId }}

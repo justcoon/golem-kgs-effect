@@ -171,7 +171,6 @@ describe("Entity Resolution & Search for Neighborhood & Path APIs", () => {
         ],
         edges: [
           {
-            id: "edge_1",
             sourceId: "ent_technology_postgresql",
             targetId: "ent_technology_golem_cloud",
             relationType: "CONNECTS",

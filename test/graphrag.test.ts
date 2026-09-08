@@ -82,68 +82,53 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
     // In-memory graph for testing multi-hop traversal and path finding
     const testEdges: Edge[] = [
       {
-        id: "e1",
         sourceId: "ent_A",
         targetId: "ent_B",
         relationType: "CALLS",
         weight: 1.0,
         confidence: 0.95,
         properties: {},
-        validFrom: null,
-        validUntil: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
       {
-        id: "e2",
         sourceId: "ent_B",
         targetId: "ent_C",
         relationType: "DEPENDS_ON",
         weight: 0.8,
         confidence: 0.9,
         properties: {},
-        validFrom: null,
-        validUntil: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
       {
-        id: "e3",
         sourceId: "ent_A",
         targetId: "ent_C",
         relationType: "USES",
         weight: 0.5,
         confidence: 0.7,
         properties: {},
-        validFrom: null,
-        validUntil: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
       // Cycle: ent_C -> ent_A
       {
-        id: "e4",
         sourceId: "ent_C",
         targetId: "ent_A",
         relationType: "REFERENCES",
         weight: 0.4,
         confidence: 0.6,
         properties: {},
-        validFrom: null,
-        validUntil: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
       {
-        id: "e5",
         sourceId: "ent_C",
         targetId: "ent_D",
         relationType: "WRITES_TO",
         weight: 1.2,
         confidence: 0.85,
         properties: {},
-        validFrom: null,
-        validUntil: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -191,16 +176,17 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
                 continue;
               }
 
+              const edgeKey = `${edge.sourceId}_${edge.relationType}_${edge.targetId}`;
               if (direction === "OUTBOUND") {
                 if (frontier.has(edge.sourceId)) {
-                  collected.set(edge.id, edge);
+                  collected.set(edgeKey, edge);
                   if (!visited.has(edge.targetId)) {
                     nextFrontier.add(edge.targetId);
                   }
                 }
               } else if (direction === "INBOUND") {
                 if (frontier.has(edge.targetId)) {
-                  collected.set(edge.id, edge);
+                  collected.set(edgeKey, edge);
                   if (!visited.has(edge.sourceId)) {
                     nextFrontier.add(edge.sourceId);
                   }
@@ -210,7 +196,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
                   frontier.has(edge.sourceId) ||
                   frontier.has(edge.targetId)
                 ) {
-                  collected.set(edge.id, edge);
+                  collected.set(edgeKey, edge);
                   if (!visited.has(edge.targetId)) {
                     nextFrontier.add(edge.targetId);
                   }
@@ -342,7 +328,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
               foundPaths.length > 0 ? foundPaths[0]!.edges.length : null,
           };
         }),
-      deleteEdge: (_id) => Effect.sync(() => true),
+      deleteEdge: (_src, _tgt, _rel) => Effect.sync(() => true),
     };
 
     it("should discover multi-hop neighborhood up to depth 2", async () => {
@@ -449,15 +435,12 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
 
       const sampleEdges: Edge[] = [
         {
-          id: "edge_golem_effect",
           sourceId: "ent_golem",
           targetId: "ent_effect",
           relationType: "INTEGRATES_WITH",
           weight: 1.0,
           confidence: 0.95,
           properties: {},
-          validFrom: null,
-          validUntil: null,
           createdAt: new Date(),
           updatedAt: new Date(),
         },
@@ -536,15 +519,12 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
 
     const mockEdges: Edge[] = [
       {
-        id: "e_g_p",
         sourceId: "ent_golem",
         targetId: "ent_postgres",
         relationType: "STORES_DATA_IN",
         weight: 1.0,
         confidence: 0.92,
         properties: {},
-        validFrom: null,
-        validUntil: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -741,7 +721,6 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
             entityIds: ["e1", "e2"],
             edges: [
               {
-                id: "edge_1_2",
                 sourceId: "e1",
                 targetId: "e2",
                 relationType: "CONNECTS",
