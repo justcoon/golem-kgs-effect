@@ -1,0 +1,113 @@
+services:
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg18-trixie
+    container_name: golem-kg-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - golem-kg-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RustFS S3-compatible stokge
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: golem-kg-rustfs
+    environment:
+      RUSTFS_DATA_DIR: /data
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+      RUSTFS_REGION: ${AWS_DEFAULT_REGION}
+      RUSTFS_BUCKET: golem-documents
+      RUSTFS_ADDR: ${RUSTFS_ADDR}
+      RUSTFS_LOG_LEVEL: ${RUSTFS_LOG_LEVEL}
+      # Standard AWS variables for compatibility
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    ports:
+      - "${S3_PORT}:9000"  # S3 API port
+    volumes:
+      - rustfs_data:/data
+    networks:
+      - golem-kg-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:${RUSTFS_PORT}/health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Ollama for embeddings
+  ollama:
+    image: ollama/ollama:latest
+    container_name: golem-kg-ollama
+    ports:
+      - "${OLLAMA_PORT}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+    networks:
+      - golem-kg-network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # RustFS setup for bucket initialization
+  rustfs-setup:
+    image: amazon/aws-cli:latest
+    container_name: golem-kg-rustfs-setup
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - AWS_S3_BUCKETS=${AWS_S3_BUCKETS}
+    networks:
+      - golem-kg-network
+    entrypoint: ["/bin/sh", "-c", "for bucket in $(echo ${AWS_S3_BUCKETS} | tr ',' ' '); do aws --endpoint-url http://rustfs:9000 s3 mb s3://$$bucket || echo 'Bucket $$bucket might already exist'; done; echo 'RustFS bucket setup complete'"]
+
+  # Ollama setup for embedding model
+  ollama-setup:
+    image: ollama/ollama:latest
+    container_name: golem-kg-ollama-setup
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+    networks:
+      - golem-kg-network
+    entrypoint: >
+      /bin/sh -c "
+      ollama pull $${OLLAMA_MODEL} &&
+      echo 'Embedding model downloaded successfully'
+      "
+
+volumes:
+  postgres_data:
+    driver: local
+  rustfs_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+networks:
+  golem-kg-network:
+    driver: bridge

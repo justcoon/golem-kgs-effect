@@ -1,0 +1,144 @@
+manifestVersion: 1.5.0
+
+app: golem-kgs-effect
+
+environments:
+  local:
+    server: local
+  cloud:
+    server: cloud
+
+secretDefaults:
+  local:
+    db:
+      user: "{{ POSTGRES_USER }}"
+      password: "{{ POSTGRES_PASSWORD }}"
+    embedding:
+      apiKey: "{{ EMBEDDING_API_KEY }}"
+    resources:
+      s3:
+        - name: "main"
+          endpoint: "{{ S3_ENDPOINT_URL }}"
+          region: "{{ AWS_DEFAULT_REGION }}"
+          bucket: "golem-documents"
+          prefixes:
+            - "general/"
+          accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
+          secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
+#       - name: "legal"
+#         endpoint: "{{ S3_ENDPOINT_URL }}"
+#         region: "{{ AWS_DEFAULT_REGION }}"
+#         bucket: "legal-docs"
+#         accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
+#         secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
+#       - name: "technical"
+#         endpoint: "{{ S3_ENDPOINT_URL }}"
+#         region: "{{ AWS_DEFAULT_REGION }}"
+#         bucket: "technical-docs"
+#         prefixes:
+#           - "architecture/"
+#         accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
+#         secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
+
+
+components:
+  golem-kgs-effect:effect-main:
+    dir: ""
+    templates: effect
+    config:
+      db:
+        host: "{{ POSTGRES_HOST }}"
+        db: "{{ POSTGRES_DB }}"
+        port: "{{ POSTGRES_PORT }}"
+      embedding:
+        api_base: "{{ EMBEDDING_API_BASE }}"
+        model: "{{ EMBEDDING_MODEL }}"
+      extraction:
+        cooccurrence:
+          enabled: true
+          window: "sentence"
+          confidence: 0.75
+          relation: "CO_OCCURS_WITH"
+          maxEdgesPerChunk: 25
+        dictionary:
+          - alias: "golem"
+            canonical: "Golem Cloud"
+          - alias: "golem cloud"
+            canonical: "Golem Cloud"
+          - alias: "effect"
+            canonical: "Effect-TS"
+          - alias: "typescript"
+            canonical: "TypeScript"
+          - alias: "postgresql"
+            canonical: "PostgreSQL"
+          - alias: "postgres"
+            canonical: "PostgreSQL"
+          - alias: "pgvector"
+            canonical: "pgvector"
+          - alias: "docker"
+            canonical: "Docker"
+          - alias: "rustfs"
+            canonical: "RustFS"
+          - alias: "ollama"
+            canonical: "Ollama"
+          - alias: "s3"
+            canonical: "Amazon S3"
+          - alias: "aws"
+            canonical: "Amazon Web Services"
+          - alias: "wasm"
+            canonical: "WebAssembly"
+          - alias: "webassembly"
+            canonical: "WebAssembly"
+          - alias: "quickjs"
+            canonical: "QuickJS"
+          - alias: "hnsw"
+            canonical: "HNSW Index"
+          - alias: "rrf"
+            canonical: "Reciprocal Rank Fusion"
+          - alias: "graphrag"
+            canonical: "GraphRAG"
+        relationPatterns:
+          - relation: "DEPENDS_ON"
+            confidence: 0.85
+            phrases:
+              - "depends on"
+              - "requires"
+              - "relies on"
+              - "uses"
+              - "utilizes"
+              - "leverages"
+          - relation: "AUTHORED_BY"
+            confidence: 0.90
+            phrases:
+              - "authored by"
+              - "written by"
+              - "created by"
+          - relation: "PART_OF"
+            confidence: 0.85
+            phrases:
+              - "is part of"
+              - "belongs to"
+              - "member of"
+          - relation: "RELATES_TO"
+            confidence: 0.80
+            phrases:
+              - "contains"
+              - "includes"
+              - "references"
+              - "mentions"
+              - "points to"
+              - "relates to"
+        stopwords:
+          - "Table Of"
+          - "The Following"
+          - "For Example"
+          - "In Addition"
+
+httpApi:
+  deployments:
+    local:
+      - domain: localhost:9006
+        agents:
+          KnowledgeAccessAgent: {}
+          IngestionCoordinatorAgent: {}
+          S3IngestorTaskAgent: {}
