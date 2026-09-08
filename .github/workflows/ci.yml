@@ -141,6 +141,19 @@ jobs:
             sleep 2
           done
       - name: Deploy components
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: golem_kg
+          POSTGRES_USER: golem_user
+          POSTGRES_PASSWORD: golem_password
+          AWS_ACCESS_KEY_ID: rustfsadmin
+          AWS_SECRET_ACCESS_KEY: rustfsadmin123
+          AWS_DEFAULT_REGION: us-east-1
+          S3_ENDPOINT_URL: http://localhost:9000
+          EMBEDDING_API_BASE: http://localhost:11434/v1
+          EMBEDDING_MODEL: nomic-embed-text
+          EMBEDDING_API_KEY: ollama
         run: golem deploy --reset --yes
       - name: Smoke test deployment
         run: |
