@@ -425,7 +425,7 @@ The Golem HTTP Gateway will be active on **`http://localhost:9006`**.
 
 ### 4. Start Frontend
 
-A Vue 3 + Vite visual explorer is available in `frontend/`:
+A Vue 3 + Vite visual explorer is available in [`frontend/`](./frontend/). For a visual walkthrough with screenshots, feature breakdowns, and frontend architecture details, see the [Frontend Documentation](./frontend/README.md).
 
 ```bash
 cd frontend
