@@ -245,19 +245,19 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.ok(params !== null);
     });
 
-    it("should match S3IngestorTaskAgent sync route: /api/ingestion/{resourceName}/sync", () => {
-      const pattern = "/api/ingestion/{resourceName}/sync";
-      const params = matchRoute(pattern, "/api/ingestion/technical/sync");
+    it("should match S3IngestorTaskAgent sync route: /api/ingestion/s3/{resourceName}/sync", () => {
+      const pattern = "/api/ingestion/s3/{resourceName}/sync";
+      const params = matchRoute(pattern, "/api/ingestion/s3/technical/sync");
 
       assert.ok(params !== null);
       assert.equal(params?.resourceName, "technical");
     });
 
-    it("should match S3IngestorTaskAgent batch callback route: /api/ingestion/{resourceName}/batch-callback", () => {
-      const pattern = "/api/ingestion/{resourceName}/batch-callback";
+    it("should match S3IngestorTaskAgent batch callback route: /api/ingestion/s3/{resourceName}/batch-callback", () => {
+      const pattern = "/api/ingestion/s3/{resourceName}/batch-callback";
       const params = matchRoute(
         pattern,
-        "/api/ingestion/legal-contracts/batch-callback",
+        "/api/ingestion/s3/legal-contracts/batch-callback",
       );
 
       assert.ok(params !== null);

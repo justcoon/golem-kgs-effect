@@ -83,7 +83,8 @@ Lexical full-text search indexes provide keyword recall.
         metadata: { category: "architecture" },
         tags: ["design", "golem"],
         source: "s3",
-        namespace: "engineering",
+        resourceName: "engineering",
+        sourceKey: "specs/v1.md",
         sizeBytes: Buffer.byteLength(sampleMarkdown, "utf8"),
         createdAt: now,
         updatedAt: now,
@@ -99,7 +100,8 @@ Lexical full-text search indexes provide keyword recall.
         result.chunks[0].metadata?.documentTitle,
         "Technical Specification",
       );
-      assert.equal(result.chunks[0].metadata?.namespace, "engineering");
+      assert.equal(result.chunks[0].metadata?.resourceName, "engineering");
+      assert.equal(result.chunks[0].metadata?.sourceKey, "specs/v1.md");
     });
 
     it("should handle empty or whitespace-only documents cleanly", () => {

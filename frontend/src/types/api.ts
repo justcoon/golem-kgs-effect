@@ -94,7 +94,9 @@ export interface DocumentResult {
   metadata: Record<string, any>;
   tags: string[];
   source: string;
-  namespace: string;
+  resourceName?: string;
+  sourceKey?: string;
+  namespace?: string;
   sizeBytes: number;
   createdAt: string;
   updatedAt: string;

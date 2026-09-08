@@ -62,8 +62,12 @@ const copyContent = async () => {
             <span class="value">{{ document.source || 'N/A' }}</span>
           </div>
           <div class="meta-item">
-            <span class="label">Namespace</span>
-            <span class="value">{{ document.namespace || 'N/A' }}</span>
+            <span class="label">Resource</span>
+            <span class="value">{{ document.resourceName || document.namespace || 'N/A' }}</span>
+          </div>
+          <div v-if="document.sourceKey" class="meta-item">
+            <span class="label">File / Key</span>
+            <span class="value doc-key">{{ document.sourceKey }}</span>
           </div>
           <div class="meta-item">
             <span class="label">Size</span>
@@ -212,6 +216,12 @@ const copyContent = async () => {
   font-size: 0.9rem;
   font-weight: 500;
   word-break: break-all;
+}
+
+.doc-key {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--primary, #a78bfa);
 }
 
 .tag-list {

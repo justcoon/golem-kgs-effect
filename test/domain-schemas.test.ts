@@ -31,8 +31,43 @@ import {
   SyncStatus,
 } from "../src/domain/connector.js";
 import { DatabaseConfigSchema } from "../src/config/schema.js";
+import { generateDocumentUuid, isValidUuid } from "../src/utils/uuid.js";
 
 describe("Domain Schemas", () => {
+  describe("Deterministic Document UUID Generator", () => {
+    it("should generate valid RFC 4122 UUID v5 strings", () => {
+      const id = generateDocumentUuid("s3", "main", "general/overview.md");
+      assert.ok(isValidUuid(id));
+      assert.match(
+        id,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+    });
+
+    it("should be strictly deterministic across calls", () => {
+      const id1 = generateDocumentUuid("s3", "legal", "contracts/nda.pdf");
+      const id2 = generateDocumentUuid("s3", "legal", "contracts/nda.pdf");
+      assert.equal(id1, id2);
+    });
+
+    it("should isolate different resources with the same key", () => {
+      const idRes1 = generateDocumentUuid("s3", "main", "readme.md");
+      const idRes2 = generateDocumentUuid("s3", "partner", "readme.md");
+      assert.notEqual(idRes1, idRes2);
+    });
+
+    it("should isolate different sources with the same resource and key", () => {
+      const idS3 = generateDocumentUuid("s3", "main", "readme.md");
+      const idGit = generateDocumentUuid("git", "main", "readme.md");
+      assert.notEqual(idS3, idGit);
+    });
+
+    it("should validate valid and reject invalid UUIDs", () => {
+      assert.ok(isValidUuid("a40f8087-0b1e-5a08-a53d-d30777b732da"));
+      assert.ok(!isValidUuid("invalid-uuid-string"));
+      assert.ok(!isValidUuid("doc_s3_main_general_overview_md"));
+    });
+  });
   describe("Entity Schemas", () => {
     it("should validate and parse a valid Entity", () => {
       const now = new Date();
@@ -195,7 +230,8 @@ describe("Domain Schemas", () => {
         metadata: { author: "Agent" },
         tags: ["architecture", "spec"],
         source: "s3",
-        namespace: "default",
+        resourceName: "default",
+        sourceKey: "specs/v1.md",
         sizeBytes: 1024,
         createdAt: now,
         updatedAt: now,
@@ -203,6 +239,8 @@ describe("Domain Schemas", () => {
 
       const doc = Schema.decodeUnknownSync(RawDocument)(raw);
       assert.equal(doc.source, "s3");
+      assert.equal(doc.resourceName, "default");
+      assert.equal(doc.sourceKey, "specs/v1.md");
       assert.equal(doc.sizeBytes, 1024);
       assert.equal(doc.tags.length, 2);
 

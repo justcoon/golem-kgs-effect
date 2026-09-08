@@ -13,6 +13,7 @@ import {
 } from "../src/connectors/s3-signer.js";
 import { S3ConnectorService } from "../src/connectors/s3-connector.js";
 import { type S3CursorData } from "../src/connectors/connector-base.js";
+import { generateDocumentUuid, isValidUuid } from "../src/utils/uuid.js";
 
 describe("Phase 3 Connectors & S3 Ingestion", () => {
   describe("Dynamic Multi-Resource Configuration", () => {
@@ -228,9 +229,21 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
         const extracted = yield* connector.fetch(discovered[0]);
         assert.equal(extracted.document.title, "Knowledge System");
         assert.equal(extracted.document.source, "s3");
-        assert.equal(extracted.document.namespace, "main");
-        assert.ok(
-          extracted.document.id.startsWith("doc_s3_main_docs_overview"),
+        assert.equal(extracted.document.resourceName, "main");
+        assert.equal(extracted.document.sourceKey, "docs/overview.md");
+        assert.ok(isValidUuid(extracted.document.id));
+        assert.equal(
+          extracted.document.id,
+          generateDocumentUuid("s3", "main", "docs/overview.md"),
+        );
+        // Verify metadata does not leak infrastructure
+        assert.equal(
+          (extracted.document.metadata as Record<string, unknown>).endpoint,
+          undefined,
+        );
+        assert.equal(
+          (extracted.document.metadata as Record<string, unknown>).region,
+          undefined,
         );
         assert.equal(extracted.provenance.source, "s3");
         assert.equal(extracted.provenance.uri, "s3://main/docs/overview.md");
@@ -294,6 +307,50 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
           "Modified file with new etag should be re-discovered",
         );
         assert.equal(discovered[0].eTag, "etag_overview_v2");
+      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
+
+      await Effect.runPromise(testProgram);
+    });
+
+    it("should guarantee multi-resource isolation and deterministic UUIDs across identical paths", async () => {
+      const mockFiles = {
+        "reports/annual.pdf": {
+          content: "Report content",
+          lastModified: new Date("2026-09-08T10:00:00.000Z"),
+          etag: "etag_annual_1",
+        },
+      };
+
+      const testProgram = Effect.gen(function* () {
+        const service = yield* S3ConnectorService;
+
+        // Resource 1: "marketing"
+        const connMarketing = yield* service.createConnector("marketing");
+        const discMarketing = yield* connMarketing.discover(Option.none());
+        assert.equal(discMarketing.length, 1);
+        const docMarketing = yield* connMarketing.fetch(discMarketing[0]);
+
+        // Resource 2: "finance"
+        const connFinance = yield* service.createConnector("finance");
+        const discFinance = yield* connFinance.discover(Option.none());
+        assert.equal(discFinance.length, 1);
+        const docFinance = yield* connFinance.fetch(discFinance[0]);
+
+        // Same file path and same bucket name, but different resources
+        assert.equal(docMarketing.document.sourceKey, "reports/annual.pdf");
+        assert.equal(docFinance.document.sourceKey, "reports/annual.pdf");
+
+        assert.equal(docMarketing.document.resourceName, "marketing");
+        assert.equal(docFinance.document.resourceName, "finance");
+
+        // UUIDs MUST be valid and strictly different
+        assert.ok(isValidUuid(docMarketing.document.id));
+        assert.ok(isValidUuid(docFinance.document.id));
+        assert.notEqual(docMarketing.document.id, docFinance.document.id);
+
+        // Determinism: Re-fetching for marketing yields identical UUID
+        const docMarketingRepeat = yield* connMarketing.fetch(discMarketing[0]);
+        assert.equal(docMarketing.document.id, docMarketingRepeat.document.id);
       }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
 
       await Effect.runPromise(testProgram);

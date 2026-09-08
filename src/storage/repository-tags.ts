@@ -37,8 +37,14 @@ export interface DocumentRepositoryShape {
   readonly findDocumentById: (
     id: string,
   ) => Effect.Effect<Option.Option<RawDocument>, SqlError>;
+  readonly findByResourceKey: (
+    source: string,
+    resourceName: string,
+    sourceKey: string,
+  ) => Effect.Effect<Option.Option<RawDocument>, SqlError>;
   readonly listDocuments: (options?: {
     source?: string;
+    resourceName?: string;
     namespace?: string;
     limit?: number;
     offset?: number;

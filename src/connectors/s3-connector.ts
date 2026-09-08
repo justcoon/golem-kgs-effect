@@ -28,6 +28,7 @@ import {
   type SaveCheckpointInput,
   type SyncStatus,
 } from "../domain/connector.js";
+import { generateDocumentUuid } from "../utils/uuid.js";
 
 export const DEFAULT_SUPPORTED_EXTENSIONS = [
   ".md",
@@ -313,8 +314,7 @@ export class S3Connector implements SourceConnector<
 
       const title = extractTitle(content, item.id);
       const ext = getFileExtension(item.id);
-      const safeKeyId = item.id.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const docId = `doc_s3_${target.bucket}_${safeKeyId}`;
+      const docId = generateDocumentUuid("s3", target.name, item.id);
 
       const document: RawDocument = {
         id: docId,
@@ -322,16 +322,14 @@ export class S3Connector implements SourceConnector<
         content,
         metadata: {
           bucket: target.bucket,
-          key: item.id,
           eTag: item.eTag,
           sizeBytes: item.sizeBytes,
           lastModified: item.lastModified.toISOString(),
-          region: target.region,
-          endpoint: target.endpoint,
         },
-        tags: ["s3", target.bucket, ext],
+        tags: ["s3", target.name, ext],
         source: "s3",
-        namespace: target.bucket,
+        resourceName: target.name,
+        sourceKey: item.id,
         sizeBytes: Buffer.byteLength(content, "utf8"),
         createdAt: item.lastModified,
         updatedAt: new Date(),
@@ -523,14 +521,17 @@ export class S3ConnectorService extends Context.Service<
                 });
               }
 
+              const resourceName =
+                typeof targetOrName === "string"
+                  ? targetOrName
+                  : targetOrName.name;
               const bucketName =
                 typeof targetOrName === "string"
                   ? targetOrName
                   : targetOrName.bucket;
               const title = extractTitle(entry.content, item.id);
               const ext = getFileExtension(item.id);
-              const safeKeyId = item.id.replace(/[^a-zA-Z0-9_-]/g, "_");
-              const docId = `doc_s3_${bucketName}_${safeKeyId}`;
+              const docId = generateDocumentUuid("s3", resourceName, item.id);
 
               const document: RawDocument = {
                 id: docId,
@@ -538,14 +539,14 @@ export class S3ConnectorService extends Context.Service<
                 content: entry.content,
                 metadata: {
                   bucket: bucketName,
-                  key: item.id,
                   eTag: item.eTag,
                   sizeBytes: item.sizeBytes,
                   lastModified: item.lastModified.toISOString(),
                 },
-                tags: ["s3", bucketName, ext],
+                tags: ["s3", resourceName, ext],
                 source: "s3",
-                namespace: bucketName,
+                resourceName,
+                sourceKey: item.id,
                 sizeBytes: Buffer.byteLength(entry.content, "utf8"),
                 createdAt: item.lastModified,
                 updatedAt: new Date(),

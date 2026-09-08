@@ -247,7 +247,8 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         metadata: JSON.stringify({ author: "Alice" }),
         tags: ["guide", "docs"],
         source: "s3_main",
-        namespace: "default",
+        resourceName: "default",
+        sourceKey: "overview.md",
         sizeBytes: 1024,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -295,6 +296,16 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         Effect.sync(() =>
           savedDocs.has(id) ? Option.some(savedDocs.get(id)!) : Option.none(),
         ),
+      findByResourceKey: (source, resourceName, sourceKey) =>
+        Effect.sync(() => {
+          const match = Array.from(savedDocs.values()).find(
+            (d) =>
+              d.source === source &&
+              d.resourceName === resourceName &&
+              d.sourceKey === sourceKey,
+          );
+          return match ? Option.some(match) : Option.none();
+        }),
       listDocuments: () => Effect.sync(() => Array.from(savedDocs.values())),
       deleteDocument: (id) =>
         Effect.sync(() => {

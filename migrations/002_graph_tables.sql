@@ -10,14 +10,17 @@ CREATE TABLE IF NOT EXISTS documents (
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     tags TEXT[] DEFAULT '{}',
     source VARCHAR(100) NOT NULL,
-    namespace VARCHAR(100) NOT NULL DEFAULT 'default',
+    resource_name VARCHAR(100) NOT NULL DEFAULT 'default',
+    source_key VARCHAR(1024) NOT NULL DEFAULT '',
     size_bytes BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_documents_source_resource_key UNIQUE (source, resource_name, source_key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source);
-CREATE INDEX IF NOT EXISTS idx_documents_namespace ON documents(namespace);
+CREATE INDEX IF NOT EXISTS idx_documents_resource_name ON documents(resource_name);
+CREATE INDEX IF NOT EXISTS idx_documents_source_resource_key ON documents(source, resource_name, source_key);
 
 -- Canonical Knowledge Graph Entities (Nodes)
 CREATE TABLE IF NOT EXISTS entities (

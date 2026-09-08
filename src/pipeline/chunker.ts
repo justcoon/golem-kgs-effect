@@ -233,7 +233,8 @@ export class DocumentChunker {
       DocumentChunker.chunkText(document.id, document.content, options, {
         documentTitle: document.title,
         source: document.source,
-        namespace: document.namespace,
+        resourceName: document.resourceName,
+        sourceKey: document.sourceKey,
         ...(document.metadata as Record<string, unknown>),
       }),
     );

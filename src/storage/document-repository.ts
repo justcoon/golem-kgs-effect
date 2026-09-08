@@ -10,7 +10,8 @@ interface DocumentRow {
   readonly metadata: unknown;
   readonly tags: string[];
   readonly source: string;
-  readonly namespace: string;
+  readonly resource_name: string;
+  readonly source_key: string;
   readonly size_bytes: number | string;
   readonly created_at: Date | string;
   readonly updated_at: Date | string;
@@ -26,7 +27,8 @@ const mapDocumentRow = (row: DocumentRow): RawDocument => ({
       : ((row.metadata as Record<string, unknown>) ?? {}),
   tags: row.tags ?? [],
   source: row.source,
-  namespace: row.namespace,
+  resourceName: row.resource_name,
+  sourceKey: row.source_key,
   sizeBytes: Number(row.size_bytes),
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
@@ -48,7 +50,7 @@ DocumentRepository.Default = Layer.effect(
         const now = new Date();
         const rows = yield* sql<DocumentRow>`
             INSERT INTO documents (
-              id, title, content, metadata, tags, source, namespace, size_bytes, created_at, updated_at
+              id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, created_at, updated_at
             ) VALUES (
               ${doc.id},
               ${doc.title},
@@ -56,7 +58,8 @@ DocumentRepository.Default = Layer.effect(
               ${Pg.jsonb(doc.metadata)},
               ${Pg.array(doc.tags)},
               ${doc.source},
-              ${doc.namespace},
+              ${doc.resourceName},
+              ${doc.sourceKey},
               ${doc.sizeBytes},
               ${doc.createdAt ?? now},
               ${doc.updatedAt ?? now}
@@ -67,7 +70,8 @@ DocumentRepository.Default = Layer.effect(
               metadata = EXCLUDED.metadata,
               tags = EXCLUDED.tags,
               source = EXCLUDED.source,
-              namespace = EXCLUDED.namespace,
+              resource_name = EXCLUDED.resource_name,
+              source_key = EXCLUDED.source_key,
               size_bytes = EXCLUDED.size_bytes,
               updated_at = EXCLUDED.updated_at
             RETURNING *
@@ -92,8 +96,26 @@ DocumentRepository.Default = Layer.effect(
           : Option.none();
       });
 
+    const findByResourceKey = (
+      source: string,
+      resourceName: string,
+      sourceKey: string,
+    ) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<DocumentRow>`
+            SELECT * FROM documents
+            WHERE source = ${source} AND resource_name = ${resourceName} AND source_key = ${sourceKey}
+            LIMIT 1
+          `;
+        const first = rows[0];
+        return rows.length > 0 && first
+          ? Option.some(mapDocumentRow(first))
+          : Option.none();
+      });
+
     const listDocuments = (options?: {
       source?: string;
+      resourceName?: string;
       namespace?: string;
       limit?: number;
       offset?: number;
@@ -101,11 +123,12 @@ DocumentRepository.Default = Layer.effect(
       Effect.gen(function* () {
         const limit = options?.limit ?? 50;
         const offset = options?.offset ?? 0;
+        const resName = options?.resourceName ?? options?.namespace;
         let rows: ReadonlyArray<DocumentRow>;
-        if (options?.source && options?.namespace) {
+        if (options?.source && resName) {
           rows = yield* sql<DocumentRow>`
               SELECT * FROM documents
-              WHERE source = ${options.source} AND namespace = ${options.namespace}
+              WHERE source = ${options.source} AND resource_name = ${resName}
               ORDER BY created_at DESC
               LIMIT ${limit} OFFSET ${offset}
             `;
@@ -116,10 +139,10 @@ DocumentRepository.Default = Layer.effect(
               ORDER BY created_at DESC
               LIMIT ${limit} OFFSET ${offset}
             `;
-        } else if (options?.namespace) {
+        } else if (resName) {
           rows = yield* sql<DocumentRow>`
               SELECT * FROM documents
-              WHERE namespace = ${options.namespace}
+              WHERE resource_name = ${resName}
               ORDER BY created_at DESC
               LIMIT ${limit} OFFSET ${offset}
             `;
@@ -152,6 +175,7 @@ DocumentRepository.Default = Layer.effect(
     return {
       saveDocument,
       findDocumentById,
+      findByResourceKey,
       listDocuments,
       deleteDocument,
       count,

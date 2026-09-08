@@ -21,7 +21,8 @@ interface DocumentRow {
   readonly metadata: unknown;
   readonly tags: ReadonlyArray<string>;
   readonly source: string;
-  readonly namespace: string;
+  readonly resource_name: string;
+  readonly source_key: string;
   readonly size_bytes: number | bigint;
   readonly created_at: Date | string;
   readonly updated_at: Date | string;
@@ -57,7 +58,8 @@ const mapDocumentRow = (row: DocumentRow): RawDocument => ({
       : ((row.metadata as Record<string, unknown>) ?? {}),
   tags: Array.from(row.tags ?? []),
   source: row.source,
-  namespace: row.namespace,
+  resourceName: row.resource_name,
+  sourceKey: row.source_key,
   sizeBytes: Number(row.size_bytes),
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
@@ -95,18 +97,19 @@ ChunkRepository.Default = Layer.effect(
         const tags = Pg.array(doc.tags ?? []);
 
         const rows = (yield* sql<DocumentRow>`
-            INSERT INTO documents (id, title, content, metadata, tags, source, namespace, size_bytes, updated_at)
-            VALUES (${doc.id}, ${doc.title}, ${doc.content}, ${meta}, ${tags}, ${doc.source}, ${doc.namespace}, ${doc.sizeBytes}, NOW())
+            INSERT INTO documents (id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, updated_at)
+            VALUES (${doc.id}, ${doc.title}, ${doc.content}, ${meta}, ${tags}, ${doc.source}, ${doc.resourceName}, ${doc.sourceKey}, ${doc.sizeBytes}, NOW())
             ON CONFLICT (id) DO UPDATE SET
               title = EXCLUDED.title,
               content = EXCLUDED.content,
               metadata = EXCLUDED.metadata,
               tags = EXCLUDED.tags,
               source = EXCLUDED.source,
-              namespace = EXCLUDED.namespace,
+              resource_name = EXCLUDED.resource_name,
+              source_key = EXCLUDED.source_key,
               size_bytes = EXCLUDED.size_bytes,
               updated_at = NOW()
-            RETURNING id, title, content, metadata, tags, source, namespace, size_bytes, created_at, updated_at
+            RETURNING id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, created_at, updated_at
           `) as ReadonlyArray<DocumentRow>;
 
         const row = rows[0];
@@ -119,7 +122,7 @@ ChunkRepository.Default = Layer.effect(
     const getRawDocument = (id: string) =>
       Effect.gen(function* () {
         const rows = (yield* sql<DocumentRow>`
-            SELECT id, title, content, metadata, tags, source, namespace, size_bytes, created_at, updated_at
+            SELECT id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, created_at, updated_at
             FROM documents
             WHERE id = ${id}
             LIMIT 1

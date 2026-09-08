@@ -39,7 +39,7 @@ export const S3IngestorTaskAgent = defineAgent({
   constructorParams: {
     resourceName: Schema.String,
   },
-  http: Http.mount("/api/ingestion/{resourceName}", { cors: ["*"] }),
+  http: Http.mount("/api/ingestion/s3/{resourceName}", { cors: ["*"] }),
   snapshot: Snapshot.define({
     schema: S3TaskStateSchema,
     policy: Snapshot.policy.everyN(5),
