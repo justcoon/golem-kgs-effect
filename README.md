@@ -173,7 +173,6 @@ Dedicated worker agent executing the ETL pipeline for a specific storage target 
 - **`POST /api/ingestion/s3/{resourceName}/sync`**: Discovers changed files in S3, parses Markdown, extracts headings/breadcrumbs, generates embeddings, extracts entity/relation triples, and commits to PostgreSQL.
 - **`GET /api/ingestion/s3/{resourceName}/status`**: Returns current sync metrics, processed ETags, and timestamps.
 - **`POST /api/ingestion/s3/{resourceName}/reset`**: Clears sync cursor to force a full re-index.
-- **`POST /api/ingestion/s3/{resourceName}/batch-callback`**: Webhook receiver for asynchronous external batch jobs.
 
 ### 3. `KnowledgeAccessAgent` (Ephemeral / Stateless)
 
@@ -215,7 +214,6 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 | **Ingestor**    | `GET`  | `/api/ingestion/s3/{resourceName}/status`              | Ingestor status and checkpoint                                 |
 | **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/sync`                | Trigger S3 resource sync                                       |
 | **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/reset`               | Reset cursor for full rescan                                   |
-| **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/batch-callback`      | External batch job callback                                    |
 
 ---
 

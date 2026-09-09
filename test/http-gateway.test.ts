@@ -5,20 +5,17 @@ import path from "node:path";
 import { Schema } from "effect";
 import {
   AnswerResponseSchema,
-  BatchJobCallbackResultSchema,
   CoordinatorStateSchema,
   EntityResultSchema,
   EntitySearchRequestSchema,
   EntitySearchResponseSchema,
   KnowledgeBaseOverviewSchema,
   NeighborhoodResponseSchema,
-  OneShotWebhookHandleResponseSchema,
   PathFindingResultSchema,
   SearchResponseSchema,
   SyncScheduleSchema,
   TaskRunSummarySchema,
   WebhookIngestPayloadSchema,
-  type BatchJobCallbackResult,
   type WebhookIngestPayload,
 } from "../src/agents/types.js";
 
@@ -95,72 +92,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         assert.throws(() => {
           Schema.decodeUnknownSync(WebhookIngestPayloadSchema)(raw);
         });
-      });
-    });
-
-    describe("BatchJobCallbackResultSchema", () => {
-      it("should decode a successful batch job callback", () => {
-        const raw = {
-          jobId: "job-ocr-12345",
-          status: "COMPLETED",
-          processedItems: 42,
-          details: "All pages processed without errors",
-        };
-
-        const decoded: BatchJobCallbackResult = Schema.decodeUnknownSync(
-          BatchJobCallbackResultSchema,
-        )(raw);
-        assert.equal(decoded.jobId, "job-ocr-12345");
-        assert.equal(decoded.status, "COMPLETED");
-        assert.equal(decoded.processedItems, 42);
-        assert.equal(decoded.details, "All pages processed without errors");
-      });
-
-      it("should decode a failed batch job callback without details", () => {
-        const raw = {
-          jobId: "job-export-999",
-          status: "FAILED",
-          processedItems: 0,
-        };
-
-        const decoded = Schema.decodeUnknownSync(BatchJobCallbackResultSchema)(
-          raw,
-        );
-        assert.equal(decoded.jobId, "job-export-999");
-        assert.equal(decoded.status, "FAILED");
-        assert.equal(decoded.processedItems, 0);
-        assert.equal(decoded.details, undefined);
-      });
-
-      it("should reject an invalid status string", () => {
-        const raw = {
-          jobId: "job-invalid",
-          status: "UNKNOWN_STATUS",
-          processedItems: 10,
-        };
-        assert.throws(() => {
-          Schema.decodeUnknownSync(BatchJobCallbackResultSchema)(raw);
-        });
-      });
-    });
-
-    describe("OneShotWebhookHandleResponseSchema", () => {
-      it("should decode a one-shot webhook registration response", () => {
-        const raw = {
-          callbackUrl:
-            "https://golem-kgs-effect.localhost:9006/webhooks/hook-abc-123",
-          instructions:
-            "POST JSON completion payload to callbackUrl within 300 seconds",
-        };
-
-        const decoded = Schema.decodeUnknownSync(
-          OneShotWebhookHandleResponseSchema,
-        )(raw);
-        assert.equal(
-          decoded.callbackUrl,
-          "https://golem-kgs-effect.localhost:9006/webhooks/hook-abc-123",
-        );
-        assert.ok(decoded.instructions.includes("POST JSON"));
       });
     });
   });
@@ -251,17 +182,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
 
       assert.ok(params !== null);
       assert.equal(params?.resourceName, "technical");
-    });
-
-    it("should match S3IngestorTaskAgent batch callback route: /api/ingestion/s3/{resourceName}/batch-callback", () => {
-      const pattern = "/api/ingestion/s3/{resourceName}/batch-callback";
-      const params = matchRoute(
-        pattern,
-        "/api/ingestion/s3/legal-contracts/batch-callback",
-      );
-
-      assert.ok(params !== null);
-      assert.equal(params?.resourceName, "legal-contracts");
     });
   });
 

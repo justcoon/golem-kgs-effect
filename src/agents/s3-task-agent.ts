@@ -1,13 +1,6 @@
 import { Effect, Ref, Schema } from "effect";
+import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 import {
-  defineAgent,
-  Http,
-  method,
-  Snapshot,
-  Webhook,
-} from "@golemcloud/effect-golem";
-import {
-  BatchJobCallbackResultSchema,
   S3TaskStateSchema,
   S3TaskStatusResponseSchema,
   type S3TaskState,
@@ -66,15 +59,6 @@ export const S3IngestorTaskAgent = defineAgent({
       description:
         "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
-    }),
-    awaitBatchJob: method({
-      params: {
-        jobId: Schema.optional(Schema.String),
-      },
-      success: BatchJobCallbackResultSchema,
-      description:
-        "Allocates a durable one-shot webhook handle and awaits external batch completion callback",
-      http: [Http.post("/batch-callback")],
     }),
   },
 }).implement(({ resourceName }, snapshot) =>
@@ -139,16 +123,6 @@ export const S3IngestorTaskAgent = defineAgent({
           status: "IDLE" as const,
           errorMessage: null,
         })).pipe(Effect.map(toStatusResponse)),
-
-      awaitBatchJob: ({ jobId }) =>
-        Effect.gen(function* () {
-          const hook = yield* Webhook.create;
-          yield* Effect.logInfo(
-            `Allocated one-shot webhook for jobId=${jobId ?? "unspecified"}: ${hook.url}`,
-          );
-          const payload = yield* hook.await;
-          return yield* payload.decode(BatchJobCallbackResultSchema);
-        }).pipe(Effect.orDie),
     };
   }),
 );
