@@ -559,10 +559,39 @@ The implementation is organized into sequential phases, building from foundation
 
 Once the core system is verified and operational with S3 document storage, the following connectors can be added as pluggable modules without altering the underlying storage, agent topology, or query engine:
 
-1. **Messaging Connector (Slack):**
+1. **Web / Documentation Page Connector (`web`):**
+   - **Purpose:** Ingests public web documentation, sitemaps (`sitemap.xml`), and raw Markdown/HTML pages directly via Golem's native WASI outbound HTTP (`FetchHttpClient`) without requiring AWS credentials or external storage buckets.
+   - **Configuration (`golem.yaml`):** Configured under `secretDefaults.<env>.resources.web`:
+     ```yaml
+     resources:
+       web:
+         - name: "golem-docs"
+           baseUrl: "https://learn.golem.cloud"
+           sitemapUrl: "https://learn.golem.cloud/sitemap.xml"
+           includePatterns:
+             - "/docs/"
+           excludePatterns:
+             - "/assets/"
+             - "/tags/"
+         - name: "effect-specs"
+           baseUrl: "https://raw.githubusercontent.com"
+           seedUrls:
+             - "https://raw.githubusercontent.com/golemcloud/effect-golem/main/README.md"
+             - "https://raw.githubusercontent.com/golemcloud/golem/main/README.md"
+     ```
+   - **Discovery & Extraction:**
+     - `discover(cursor)`: Fetches `sitemap.xml` or scans `seedUrls`, tracking change state using HTTP `ETag` and `Last-Modified` headers.
+     - `fetch(item)`: Fetches HTML, applies lightweight pure-TS HTML-to-Markdown extraction (preserving titles and headings while stripping scripts/styles), and emits `RawDocument` and `ProvenanceRecord`.
+    - **Agent & Routing:**
+      - Exposes a durable `WebIngestorTaskAgent` bound 1:1 to `resourceName`, mounted at `/api/ingestion/web/{resourceName}`.
+      - Managed and scheduled by `IngestionCoordinatorAgent` under `sourceType: "web"`.
+    - **Reference Implementation:**
+      - Reuses battle-tested HTML cleaning, redirect resolution, and metadata parsing from [`golem-web-crawler-effect/fetcher-agent.ts`](https://github.com/justcoon/golem-web-crawler-effect/blob/main/src/fetcher-agent.ts). No new database migrations are required; all web metadata is persisted in `documents.metadata` and `sync_checkpoints.cursor_data`.
+
+2. **Messaging Connector (Slack):**
    - Implements `connector-base.ts` to poll channel discussion histories and process incoming webhooks.
    - Reconstructs message threads, links participant entities, and extracts conversational facts into the knowledge graph.
-2. **Collaboration Connector (Confluence / Notion):**
+3. **Collaboration Connector (Confluence / Notion):**
    - Implements `connector-base.ts` to traverse wiki spaces and hierarchical page trees.
    - Extracts page revisions, inline comments, and structural containment edges (`CHILD_OF`, `PART_OF`).
 

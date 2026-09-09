@@ -14,6 +14,7 @@ import {
   type TaskRunSummary,
 } from "./types.js";
 import { S3IngestorTaskAgent } from "./s3-task-agent.js";
+import { WebIngestorTaskAgent } from "./web-task-agent.js";
 
 export const IngestionCoordinatorAgent = defineAgent({
   name: "IngestionCoordinatorAgent",
@@ -133,6 +134,20 @@ export const IngestionCoordinatorAgent = defineAgent({
           const syncResult = yield* worker.sync({ force });
           runSummary = {
             sourceType: "s3",
+            resourceName,
+            status: syncResult.status === "COMPLETED" ? "COMPLETED" : "FAILED",
+            syncedCount: syncResult.metrics.totalSynced,
+            failedCount: syncResult.metrics.totalFailed,
+            durationMs: syncResult.metrics.lastDurationMs,
+            errorMessage: syncResult.errorMessage,
+          };
+        } else if (sourceType === "web") {
+          const worker = yield* WebIngestorTaskAgent.client.get({
+            resourceName,
+          });
+          const syncResult = yield* worker.sync({ force });
+          runSummary = {
+            sourceType: "web",
             resourceName,
             status: syncResult.status === "COMPLETED" ? "COMPLETED" : "FAILED",
             syncedCount: syncResult.metrics.totalSynced,

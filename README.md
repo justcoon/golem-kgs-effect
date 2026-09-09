@@ -10,6 +10,7 @@ A durable, serverless Knowledge Graph and GraphRAG service built on [Golem Cloud
 flowchart TD
     subgraph External["External Systems"]
         S3["AWS S3 / RustFS<br/>(Document Storage)"]
+        Web["Public Web / Sitemaps<br/>(Documentation Sites)"]
         PG[("PostgreSQL + pgvector<br/>(Metadata, Vectors, Graph)")]
         LLM["Ollama / Embedding APIs<br/>(nomic-embed-text)"]
         Client["Frontend & Client Apps<br/>(Vue 3 / REST)"]
@@ -21,6 +22,7 @@ flowchart TD
         subgraph Agents["Agents"]
             Coord["IngestionCoordinatorAgent<br/>(Durable Singleton Orchestrator)"]
             S3Worker["S3IngestorTaskAgent<br/>(Durable Worker by Resource)"]
+            WebWorker["WebIngestorTaskAgent<br/>(Durable Worker by Resource)"]
             Access["KnowledgeAccessAgent<br/>(Ephemeral Query & GraphRAG Gateway)"]
         end
     end
@@ -29,11 +31,17 @@ flowchart TD
     GW --> Access
     GW --> Coord
     GW --> S3Worker
+    GW --> WebWorker
 
     Coord -->|"RPC: invoke sync()"| S3Worker
+    Coord -->|"RPC: invoke sync()"| WebWorker
     S3Worker -->|"Read Objects"| S3
     S3Worker -->|"Embeddings"| LLM
     S3Worker -->|"Store Chunks, Vectors, Entities, Edges"| PG
+
+    WebWorker -->|"Fetch HTML & Sitemaps"| Web
+    WebWorker -->|"Embeddings"| LLM
+    WebWorker -->|"Store Chunks, Vectors, Entities, Edges"| PG
 
     Access -->|"Vector Search, Hybrid RRF, Graph Queries"| PG
     Access -->|"Synthesize Answers"| LLM
@@ -46,6 +54,7 @@ flowchart TD
 | **Golem Cloud Runtime**          | WebAssembly host providing durable execution, automatic state recovery, transactional retry, and native HTTP routing.                                  |
 | **PostgreSQL + pgvector**        | Persistent store for raw documents, text chunks, vector embeddings, entities, graph edges, and sync checkpoints (`@golemcloud/effect-golem/postgres`). |
 | **S3 Storage (RustFS / AWS S3)** | Source document repositories scanned incrementally using ETag and timestamp checkpoints with AWS SigV4 authorization.                                  |
+| **Web / Documentation Sitemaps** | Public documentation sites and web pages discovered via `sitemap.xml` or seed URLs, fetched with native outbound HTTP and pure-TS HTML parsing (no native dependencies). |
 | **Ollama Embeddings**            | Generates 768-dimensional dense vector embeddings (`nomic-embed-text`) via OpenAI-compatible endpoints.                                                |
 
 ---
@@ -60,6 +69,7 @@ The ingestion pipeline converts source documents into a dual-representation know
 flowchart TD
     subgraph Ingress["1. Document Ingress"]
         S3["S3 Bucket / Object Storage"] -->|"Fetch markdown object"| RawDoc["Raw Document<br/>(RFC 4122 UUID v5, source, resourceName, sourceKey)"]
+        Web["Public Web / Sitemaps"] -->|"Fetch HTML & clean text"| RawDoc
         RawDoc -->|"Save record"| DocDB[("PostgreSQL: documents table<br/>(Satisfies FK constraint for chunks)")]
     end
 
@@ -92,7 +102,7 @@ flowchart TD
 
 ```
  ┌────────────────┐
- │  Raw Document  │ Source object from S3 (UUID v5, resourceName, sourceKey, title, metadata)
+ │  Raw Document  │ Source object from S3 or Web page (UUID v5, resourceName, sourceKey, title, metadata)
  └───────┬────────┘
          │
          ▼
@@ -103,7 +113,7 @@ flowchart TD
          │
          ▼
  ┌────────────────────────┐
- │ Document Chunker       │ Splits Markdown into overlapping chunks with header breadcrumbs
+ │ Document Chunker       │ Splits Markdown/text into overlapping chunks with header breadcrumbs
  └───────┬────────────────┘
          │
          ├───▶ DocumentChunk[]
@@ -132,7 +142,7 @@ flowchart TD
 
 #### Key Pipeline Stages:
 
-1. **Raw Document Ingress**: S3 objects are fetched and assigned an RFC 4122 UUID v5 derived deterministically from `(source, resourceName, sourceKey)`. The document is persisted in the `documents` table first to satisfy foreign key constraints.
+1. **Raw Document Ingress**: S3 objects (Markdown files) or public web pages (fetched via HTTP, stripped of boilerplate navigation, scripts, and styles with pure-TS parsing) are assigned an RFC 4122 UUID v5 derived deterministically from `(source, resourceName, sourceKey)`. The document is persisted in the `documents` table first to satisfy foreign key constraints.
 2. **Semantic Chunking**: Documents are split into semantic chunks respecting Markdown section hierarchy. Each chunk captures hierarchical heading breadcrumbs (e.g. `Architecture > Storage > Postgres`) for contextual relevance.
 3. **LLM Embedding Invocation**: Chunk text is sent to an embedding model (e.g. `nomic-embed-text` via Ollama or OpenAI-compatible endpoint) generating normalized 768-dimensional vector embeddings.
 4. **Entity & Relation Extraction**: Text chunks are parsed to identify domain entities, technology terms, acronyms, and semantic relationships using regex rules and linguistic patterns.
@@ -159,7 +169,7 @@ The PostgreSQL storage layer enforces strict relational integrity, vector simila
 
 Central supervisor managing sync schedules, webhook ingress, and dispatching tasks to worker agents.
 
-- **`POST /api/coordinator/sync`**: Triggers a manual sync run for a named S3 target.
+- **`POST /api/coordinator/sync`**: Triggers a manual sync run for a named resource (`s3` or `web`).
 - **`POST /api/coordinator/schedules`**: Registers or updates recurring cron sync schedules.
 - **`POST /api/coordinator/schedules/pause`**: Pauses recurring sync schedules for a typed resource.
 - **`POST /api/coordinator/schedules/resume`**: Resumes paused sync schedules for a typed resource.
@@ -174,7 +184,15 @@ Dedicated worker agent executing the ETL pipeline for a specific storage target 
 - **`GET /api/ingestion/s3/{resourceName}/status`**: Returns current sync metrics, processed ETags, and timestamps.
 - **`POST /api/ingestion/s3/{resourceName}/reset`**: Clears sync cursor to force a full re-index.
 
-### 3. `KnowledgeAccessAgent` (Ephemeral / Stateless)
+### 3. `WebIngestorTaskAgent` (Durable)
+
+Dedicated worker agent executing the ETL pipeline for public web targets and documentation sitemaps (`golem-docs`, `effect-specs`).
+
+- **`POST /api/ingestion/web/{resourceName}/sync`**: Discovers pages via `sitemap.xml` or seed URLs, fetches HTML, cleans text/markdown, computes embeddings, extracts entities/relations, and commits to PostgreSQL.
+- **`GET /api/ingestion/web/{resourceName}/status`**: Returns current sync metrics, processed URLs, ETags, and timestamps.
+- **`POST /api/ingestion/web/{resourceName}/reset`**: Clears sync cursor to force a full re-index.
+
+### 4. `KnowledgeAccessAgent` (Ephemeral / Stateless)
 
 High-throughput query and retrieval interface exposing GraphRAG search, entity resolution, and graph traversal endpoints. Configured with `mode: "ephemeral"` for high concurrency.
 
@@ -211,9 +229,12 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 | **Coordinator** | `POST` | `/api/coordinator/schedules/pause`                     | Pause sync schedule for a resource                             |
 | **Coordinator** | `POST` | `/api/coordinator/schedules/resume`                    | Resume paused sync schedule for a resource                     |
 | **Coordinator** | `POST` | `/api/coordinator/webhook/{sourceType}/{resourceName}` | Webhook ingress                                                |
-| **Ingestor**    | `GET`  | `/api/ingestion/s3/{resourceName}/status`              | Ingestor status and checkpoint                                 |
-| **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/sync`                | Trigger S3 resource sync                                       |
-| **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/reset`               | Reset cursor for full rescan                                   |
+| **Ingestor (S3)** | `GET`  | `/api/ingestion/s3/{resourceName}/status`              | Ingestor status and checkpoint                                 |
+| **Ingestor (S3)** | `POST` | `/api/ingestion/s3/{resourceName}/sync`                | Trigger S3 resource sync                                       |
+| **Ingestor (S3)** | `POST` | `/api/ingestion/s3/{resourceName}/reset`               | Reset cursor for full rescan                                   |
+| **Ingestor (Web)**| `GET`  | `/api/ingestion/web/{resourceName}/status`             | Web Ingestor status and checkpoint                             |
+| **Ingestor (Web)**| `POST` | `/api/ingestion/web/{resourceName}/sync`               | Trigger Web resource sync                                      |
+| **Ingestor (Web)**| `POST` | `/api/ingestion/web/{resourceName}/reset`              | Reset cursor for full rescan                                   |
 
 ---
 
@@ -274,7 +295,38 @@ secretDefaults:
 - **`bucket` / `prefixes`**: Target bucket and optional key prefixes to scan incrementally.
 - **`accessKeyId` / `secretAccessKey`**: S3 credentials (authenticated with AWS SigV4).
 
-### 3. Entity & Relation Extraction Rules
+### 3. Web & Documentation Resources
+
+Configured under `secretDefaults.local.resources.web` as an array of named web targets:
+
+```yaml
+secretDefaults:
+  local:
+    resources:
+      web:
+        - name: "golem-docs"
+          baseUrl: "https://learn.golem.cloud"
+          sitemapUrl: "https://learn.golem.cloud/sitemap.xml"
+          includePatterns:
+            - "^https://learn\\.golem\\.cloud/.*"
+          excludePatterns:
+            - "^https://learn\\.golem\\.cloud/api/.*"
+        - name: "effect-specs"
+          baseUrl: "https://raw.githubusercontent.com"
+          seedUrls:
+            - "https://raw.githubusercontent.com/golemcloud/effect-golem/main/README.md"
+            - "https://raw.githubusercontent.com/golemcloud/golem/main/README.md"
+```
+
+- **`name`**: Unique resource identifier used by `WebIngestorTaskAgent` (e.g. `/api/ingestion/web/{resourceName}/sync`).
+- **`baseUrl`**: Base domain URL for resolving relative links and page discovery.
+- **`sitemapUrl`**: Optional URL to an XML sitemap or nested sitemap index for automated URL discovery.
+- **`seedUrls`**: Optional list of explicit entrypoint URLs to crawl directly.
+- **`includePatterns`**: Optional regex patterns; only matching URLs will be fetched and processed.
+- **`excludePatterns`**: Optional regex patterns to bypass unwanted routes (e.g. API docs, binary downloads).
+- **`headers`**: Optional custom HTTP request headers (e.g. `User-Agent`, authorization).
+
+### 4. Entity & Relation Extraction Rules
 
 Configured under `components.golem-kgs-effect:effect-main.config.extraction`:
 
@@ -333,7 +385,7 @@ components:
           - "In Addition"
 ```
 
-### 4. HTTP API Gateway Deployment
+### 5. HTTP API Gateway Deployment
 
 Configured under `httpApi.deployments.local`:
 
@@ -346,11 +398,12 @@ httpApi:
           KnowledgeAccessAgent: {}
           IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
+          WebIngestorTaskAgent: {}
 ```
 
 Routes all agent APIs through a unified HTTP reverse proxy on `http://localhost:9006`.
 
-### 5. Environment Variables Reference
+### 6. Environment Variables Reference
 
 | Variable                | Description                          | Default / Local Example     |
 | :---------------------- | :----------------------------------- | :-------------------------- |
@@ -443,6 +496,34 @@ Open **`http://localhost:5173`** to interact with the Knowledge Graph, Search, a
 curl -X POST 'http://localhost:9006/api/ingestion/s3/main/sync' \
   -H 'Content-Type: application/json' \
   -d '{"force": false}'
+```
+
+### Synchronize Web Documentation Pages
+
+```bash
+# Trigger web crawl and ingestion sync
+curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/sync' \
+  -H 'Content-Type: application/json' \
+  -d '{"force": false}'
+
+# Inspect web ingestion metrics and checkpoints
+curl -s 'http://localhost:9006/api/ingestion/web/golem-docs/status'
+
+# Reset cursor to force full re-index
+curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/reset'
+```
+
+### Trigger Sync via Coordinator Agent
+
+```bash
+# Dispatches sync job to the appropriate worker agent (s3 or web)
+curl -X POST 'http://localhost:9006/api/coordinator/sync' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sourceType": "web",
+    "resourceName": "golem-docs",
+    "force": false
+  }'
 ```
 
 ### GraphRAG Question Answering

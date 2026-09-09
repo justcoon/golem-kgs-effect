@@ -57,6 +57,10 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         "S3IngestorTaskAgent must be deployed",
       );
       assert.ok(
+        manifestContent.includes("WebIngestorTaskAgent:"),
+        "WebIngestorTaskAgent must be deployed",
+      );
+      assert.ok(
         !manifestContent.includes("Counter:"),
         "Counter must not be deployed",
       );
@@ -182,6 +186,25 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
 
       assert.ok(params !== null);
       assert.equal(params?.resourceName, "technical");
+    });
+
+    it("should match WebIngestorTaskAgent sync route: /api/ingestion/web/{resourceName}/sync", () => {
+      const pattern = "/api/ingestion/web/{resourceName}/sync";
+      const params = matchRoute(pattern, "/api/ingestion/web/golem-docs/sync");
+
+      assert.ok(params !== null);
+      assert.equal(params?.resourceName, "golem-docs");
+    });
+
+    it("should match WebIngestorTaskAgent status route: /api/ingestion/web/{resourceName}/status", () => {
+      const pattern = "/api/ingestion/web/{resourceName}/status";
+      const params = matchRoute(
+        pattern,
+        "/api/ingestion/web/golem-docs/status",
+      );
+
+      assert.ok(params !== null);
+      assert.equal(params?.resourceName, "golem-docs");
     });
   });
 

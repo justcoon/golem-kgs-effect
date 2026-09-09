@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 export const SourceType = Schema.Literals([
   "s3",
+  "web",
   "filesystem",
   "slack",
   "confluence",

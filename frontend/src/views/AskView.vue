@@ -216,7 +216,17 @@ function handleSelectEntity(entity: EntityResult) {
                   :title="`Preview document: ${citation.documentId}`"
                 >{{ citation.documentId }}</code>
               </div>
-              <span v-if="citation.sourceUri" class="citation-uri" :title="citation.sourceUri">{{ citation.sourceUri }}</span>
+              <a
+                v-if="citation.sourceUri && (citation.sourceUri.startsWith('http://') || citation.sourceUri.startsWith('https://'))"
+                :href="citation.sourceUri"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="citation-uri citation-link"
+                :title="`Open ${citation.sourceUri} in new tab`"
+              >
+                {{ citation.sourceUri }} ↗
+              </a>
+              <span v-else-if="citation.sourceUri" class="citation-uri" :title="citation.sourceUri">{{ citation.sourceUri }}</span>
             </div>
           </div>
         </div>
@@ -682,5 +692,16 @@ function handleSelectEntity(entity: EntityResult) {
   color: #94a3b8;
   font-size: 0.72rem;
   line-height: 1.35;
+}
+
+.citation-link {
+  color: #60a5fa;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.citation-link:hover {
+  color: #93c5fd;
+  text-decoration: underline;
 }
 </style>

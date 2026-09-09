@@ -19,6 +19,7 @@ import {
   type ExtractionConfig,
   ResourcesConfigValues,
   type S3ResourceTarget,
+  type WebResourceTarget,
 } from "../config/schema.js";
 import {
   AppAgentConfig,
@@ -26,6 +27,7 @@ import {
 } from "../config/agent-config.js";
 import { createPostgresClient } from "../storage/database-client.js";
 import { S3ConnectorService } from "../connectors/s3-connector.js";
+import { WebConnectorService } from "../connectors/web-connector.js";
 
 /**
  * Builds a composite Layer for all storage, pipeline, S3, and embedding services
@@ -53,6 +55,17 @@ export const makeAgentPipelineLayer = (configOrApp?: AppAgentConfigService) =>
           : [];
     const s3Targets: Record<string, S3ResourceTarget> =
       Object.fromEntries(s3Entries);
+
+    const webRaw = resourcesVal?.web;
+    const webEntries: [string, WebResourceTarget][] = Array.isArray(webRaw)
+      ? webRaw.map((target: WebResourceTarget) => [target.name, target])
+      : webRaw instanceof Map
+        ? Array.from(webRaw.entries())
+        : typeof webRaw === "object" && webRaw !== null
+          ? Object.entries(webRaw)
+          : [];
+    const webTargets: Record<string, WebResourceTarget> =
+      Object.fromEntries(webEntries);
 
     const extractionVal = yield* config.extraction;
     const extractionRules: ExtractionConfig | undefined = Option.isOption(
@@ -83,9 +96,14 @@ export const makeAgentPipelineLayer = (configOrApp?: AppAgentConfigService) =>
 
     const resourcesConfigValuesLayer = Layer.succeed(ResourcesConfigValues, {
       s3: s3Targets,
+      web: webTargets,
       getS3Resource: (name: string) =>
         s3Targets[name] !== undefined
           ? Option.some(s3Targets[name])
+          : Option.none(),
+      getWebResource: (name: string) =>
+        webTargets[name] !== undefined
+          ? Option.some(webTargets[name])
           : Option.none(),
     });
 
@@ -96,6 +114,11 @@ export const makeAgentPipelineLayer = (configOrApp?: AppAgentConfigService) =>
     );
 
     const s3Layer = S3ConnectorService.Live.pipe(
+      Layer.provide(resourcesConfigValuesLayer),
+      Layer.provide(httpLayer),
+    );
+
+    const webLayer = WebConnectorService.Live.pipe(
       Layer.provide(resourcesConfigValuesLayer),
       Layer.provide(httpLayer),
     );
@@ -111,6 +134,7 @@ export const makeAgentPipelineLayer = (configOrApp?: AppAgentConfigService) =>
       resolverLayer,
       embeddingLayer,
       s3Layer,
+      webLayer,
       graphRagLayer,
       extractionLayer,
     );

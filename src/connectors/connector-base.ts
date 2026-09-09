@@ -35,6 +35,19 @@ export interface S3CursorData {
   readonly continuationToken?: string;
 }
 
+export interface WebProcessedUrlEntry {
+  readonly url: string;
+  readonly etag?: string;
+  readonly lastModified?: string;
+  readonly contentHash?: string;
+  readonly syncedAt?: string;
+}
+
+export interface WebCursorData {
+  readonly lastSyncTimestamp: string;
+  readonly processedUrls: Record<string, WebProcessedUrlEntry>;
+}
+
 export interface SourceConnector<
   _Config,
   Cursor,
