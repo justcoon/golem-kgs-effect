@@ -46,8 +46,27 @@ export const S3ResourceTargetSchema = Schema.Struct({
 });
 export type S3ResourceTarget = typeof S3ResourceTargetSchema.Type;
 
+export const HttpHeaderSchema = Schema.Struct({
+  name: Schema.String,
+  value: Schema.String,
+});
+export type HttpHeader = typeof HttpHeaderSchema.Type;
+
+export const WebResourceTargetSchema = Schema.Struct({
+  name: Schema.String,
+  baseUrl: Schema.String,
+  sitemapUrl: Schema.optional(Schema.String),
+  seedUrls: Schema.optional(Schema.Array(Schema.String)),
+  includePatterns: Schema.optional(Schema.Array(Schema.String)),
+  excludePatterns: Schema.optional(Schema.Array(Schema.String)),
+  headers: Schema.optional(Schema.Array(HttpHeaderSchema)),
+  maxPages: Schema.optional(Schema.Number),
+});
+export type WebResourceTarget = typeof WebResourceTargetSchema.Type;
+
 export const ResourcesSecretSchema = Schema.Struct({
   s3: Schema.Array(S3ResourceTargetSchema),
+  web: Schema.Array(WebResourceTargetSchema),
 });
 export type ResourcesSecretSchema = typeof ResourcesSecretSchema.Type;
 
@@ -60,7 +79,9 @@ export type ResourcesConfigSchema = typeof ResourcesConfigSchema.Type;
 
 export interface ResourcesConfigShape {
   readonly s3: Record<string, S3ResourceTarget>;
+  readonly web: Record<string, WebResourceTarget>;
   readonly getS3Resource: (name: string) => Option.Option<S3ResourceTarget>;
+  readonly getWebResource: (name: string) => Option.Option<WebResourceTarget>;
 }
 
 export class ResourcesConfigValues extends Context.Service<

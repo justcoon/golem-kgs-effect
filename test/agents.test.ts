@@ -314,6 +314,8 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
     };
 
     const mockChunkRepo: ChunkRepositoryShape = {
+      saveRawDocument: (doc) => Effect.succeed(doc),
+      getRawDocument: () => Effect.succeed(Option.none()),
       upsertChunk: (chunk) =>
         Effect.sync(() => {
           savedChunks.push(chunk);
@@ -329,7 +331,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
             updatedAt: new Date(),
           };
         }),
-      findChunksByDocumentId: (docId) =>
+      getChunksByDocument: (docId) =>
         Effect.sync(() =>
           savedChunks
             .filter((c) => c.documentId === docId)
@@ -345,6 +347,9 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
               updatedAt: new Date(),
             })),
         ),
+      linkEntityChunk: () => Effect.void,
+      getChunksForEntity: () => Effect.succeed([]),
+      getEntityIdsForChunks: () => Effect.succeed([]),
       searchVector: () => Effect.succeed([]),
       searchKeyword: () => Effect.succeed([]),
       searchHybrid: () => Effect.succeed([]),
@@ -383,6 +388,12 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
           savedEntities.has(id)
             ? Option.some(savedEntities.get(id)!)
             : Option.none(),
+        ),
+      findByIds: (ids) =>
+        Effect.sync(() =>
+          ids
+            .map((id) => savedEntities.get(id))
+            .filter((e): e is Entity => e !== undefined),
         ),
       findByName: (name) =>
         Effect.sync(() => {
@@ -439,6 +450,7 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         Effect.sync(() => Array.from(savedEntities.values()).slice(0, limit)),
       deleteEntity: (id) => Effect.sync(() => savedEntities.delete(id)),
       count: () => Effect.sync(() => savedEntities.size),
+      getRelatedDocuments: () => Effect.succeed([]),
     };
 
     const mockGraphRepo: GraphRepositoryShape = {

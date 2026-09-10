@@ -3,6 +3,7 @@ import { defineAgent, Http, method } from "@golemcloud/effect-golem";
 import {
   AnswerResponseSchema,
   DocumentResultSchema,
+  DocumentSummarySchema,
   EntityResultSchema,
   EntitySearchResponseSchema,
   GraphRAGContextBundleSchema,
@@ -10,11 +11,15 @@ import {
   NeighborhoodResponseSchema,
   PathFindingResultSchema,
   SearchResponseSchema,
+  SourceTypeSchema,
   type Citation,
+  type DocumentResult,
   type EntityResult,
   type SearchResultItem,
 } from "./types.js";
 import { type Entity } from "../domain/entity.js";
+import { type RawDocument } from "../domain/provenance.js";
+import { type GraphRAGContextBundle } from "../domain/query.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import {
   CheckpointRepository,
@@ -34,6 +39,20 @@ const mapEntityToResult = (entity: Entity): EntityResult => ({
   description: entity.description ?? null,
   properties: entity.properties,
   metadata: entity.metadata,
+});
+
+const mapDocumentToResult = (doc: RawDocument): DocumentResult => ({
+  id: doc.id,
+  title: doc.title,
+  content: doc.content,
+  metadata: doc.metadata,
+  tags: doc.tags,
+  source: doc.source,
+  resourceName: doc.resourceName,
+  sourceKey: doc.sourceKey,
+  sizeBytes: doc.sizeBytes,
+  createdAt: new Date(doc.createdAt).toISOString(),
+  updatedAt: new Date(doc.updatedAt).toISOString(),
 });
 
 const resolveEntityId = (input: string, entityRepo: EntityRepositoryShape) =>
@@ -73,16 +92,103 @@ const fetchEntitiesByIds = (
   ids: ReadonlyArray<string>,
   entityRepo: EntityRepositoryShape,
 ) =>
-  Effect.forEach(ids, (id) => entityRepo.findById(id)).pipe(
-    Effect.map((options) =>
-      options.filter(Option.isSome).map((opt) => mapEntityToResult(opt.value)),
-    ),
+  entityRepo
+    .findByIds(ids)
+    .pipe(Effect.map((entities) => entities.map(mapEntityToResult)));
+
+function cleanTextParagraph(text: string): string {
+  return text
+    .replace(/^(#+\s*)+/g, "")
+    .replace(/^[-*•]\s+/g, "")
+    .trim();
+}
+
+function synthesizeAnswerText(
+  query: string,
+  bundle: GraphRAGContextBundle,
+): string {
+  if (bundle.relevantChunks.length === 0 && bundle.entities.length === 0) {
+    return `No matching knowledge graph entities or documents found for query "${query}".`;
+  }
+
+  const usefulParagraphs: string[] = [];
+  const seenContent = new Set<string>();
+
+  for (const chunk of bundle.relevantChunks) {
+    const rawLines = chunk.content.split(/\n+/);
+    const cleanedParagraphs: string[] = [];
+    let currentBlock: string[] = [];
+
+    for (const rawLine of rawLines) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (currentBlock.length > 0) {
+          cleanedParagraphs.push(currentBlock.join(" "));
+          currentBlock = [];
+        }
+        continue;
+      }
+
+      // Skip isolated short header lines or navigation tokens without punctuation
+      if (line.length < 25 && !/[.?!:;]$/.test(line) && !line.includes(" "))
+        continue;
+
+      currentBlock.push(line);
+    }
+    if (currentBlock.length > 0) {
+      cleanedParagraphs.push(currentBlock.join(" "));
+    }
+
+    for (const para of cleanedParagraphs) {
+      const cleaned = cleanTextParagraph(para);
+      if (cleaned.length < 35) continue;
+      const signature = cleaned.toLowerCase().slice(0, 100);
+      if (!seenContent.has(signature)) {
+        seenContent.add(signature);
+        usefulParagraphs.push(cleaned);
+      }
+      if (usefulParagraphs.length >= 3) break;
+    }
+    if (usefulParagraphs.length >= 3) break;
+  }
+
+  const sections: string[] = [];
+
+  if (usefulParagraphs.length > 0) {
+    sections.push(usefulParagraphs.join("\n\n"));
+  } else if (bundle.relevantChunks[0]?.content) {
+    sections.push(bundle.relevantChunks[0].content.trim());
+  }
+
+  // Include grounded relationship insights if available
+  if (bundle.relationships.length > 0) {
+    const entityMap = new Map<string, string>();
+    for (const e of bundle.entities) {
+      entityMap.set(e.id, e.name);
+    }
+    const relLines = bundle.relationships.slice(0, 4).map((rel) => {
+      const src = entityMap.get(rel.sourceId) ?? rel.sourceId;
+      const tgt = entityMap.get(rel.targetId) ?? rel.targetId;
+      const relVerb = rel.relationType.toLowerCase().replace(/_/g, " ");
+      return `- **${src}** ${relVerb} **${tgt}**`;
+    });
+    if (relLines.length > 0) {
+      sections.push(`**Key Graph Insights:**\n${relLines.join("\n")}`);
+    }
+  }
+
+  return (
+    sections.join("\n\n") ||
+    `Retrieved ${bundle.entities.length} related entities and ${bundle.relevantChunks.length} documents matching "${query}".`
   );
+}
 
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
   description:
     "Stateless ephemeral gateway for high-throughput concurrent search, graph traversal, GraphRAG, and question-answering",
+  promptHint:
+    "Query and explore the knowledge graph, retrieve documents, execute GraphRAG, and answer questions",
   mode: "ephemeral",
   config: AppAgentConfig,
   constructorParams: {},
@@ -97,6 +203,8 @@ export const KnowledgeAccessAgent = defineAgent({
         ),
       },
       success: SearchResponseSchema,
+      promptHint:
+        "Search ingested documents using hybrid, semantic vector, or keyword search",
       description:
         "Performs hybrid, vector, or keyword search across ingested document chunks",
       http: [Http.post("/search")],
@@ -107,6 +215,7 @@ export const KnowledgeAccessAgent = defineAgent({
         limit: Schema.optional(Schema.Number),
       },
       success: EntitySearchResponseSchema,
+      promptHint: "Search knowledge graph entities by name, alias, or keyword",
       description:
         "Searches entities by name, alias, or keyword. Returns top connected hubs if query is omitted or empty.",
       http: [Http.post("/entities/search")],
@@ -116,6 +225,8 @@ export const KnowledgeAccessAgent = defineAgent({
         limit: Schema.optional(Schema.Number),
       },
       success: EntitySearchResponseSchema,
+      promptHint:
+        "List top connected hub entities in the knowledge graph sorted by connectivity degree",
       description:
         "Returns top connected entities (graph hubs) sorted by degree",
       http: [Http.post("/entities/top")],
@@ -128,6 +239,8 @@ export const KnowledgeAccessAgent = defineAgent({
         minConfidence: Schema.optional(Schema.Number),
       },
       success: NeighborhoodResponseSchema,
+      promptHint:
+        "Traverse and explore relationships and neighboring entities around an entity",
       description:
         "Traverses graph neighborhood up to maxDepth hops around target entity",
       http: [Http.post("/neighborhood")],
@@ -137,14 +250,26 @@ export const KnowledgeAccessAgent = defineAgent({
         id: Schema.String,
       },
       success: Schema.NullOr(EntityResultSchema),
+      promptHint: "Look up an entity by its exact ID",
       description: "Finds an entity by exact ID",
       http: [Http.get("/entities/{id}")],
+    }),
+    getEntityDocuments: method({
+      params: {
+        id: Schema.String,
+      },
+      success: Schema.Array(DocumentSummarySchema),
+      promptHint: "Get documents associated with or mentioning an entity",
+      description:
+        "Retrieves summary list of all documents associated with an entity",
+      http: [Http.get("/entities/{id}/documents")],
     }),
     getDocument: method({
       params: {
         id: Schema.String,
       },
       success: Schema.NullOr(DocumentResultSchema),
+      promptHint: "Retrieve raw content and metadata for a document by its ID",
       description: "Retrieves raw document content and metadata by ID",
       http: [Http.get("/documents/{id}")],
     }),
@@ -157,6 +282,8 @@ export const KnowledgeAccessAgent = defineAgent({
         relationTypes: Schema.optional(Schema.Array(Schema.String)),
       },
       success: GraphRAGContextBundleSchema,
+      promptHint:
+        "Execute GraphRAG retrieval returning structured context and synthesized prompt",
       description:
         "Executes GraphRAG retrieval pipeline returning structured context and formatted prompt",
       http: [Http.post("/graphrag")],
@@ -172,6 +299,8 @@ export const KnowledgeAccessAgent = defineAgent({
         ),
       },
       success: PathFindingResultSchema,
+      promptHint:
+        "Find relationship paths connecting two entities in the graph",
       description:
         "Discovers multi-hop relational paths between source and target entities",
       http: [Http.post("/paths")],
@@ -184,6 +313,8 @@ export const KnowledgeAccessAgent = defineAgent({
         generateAnswer: Schema.optional(Schema.Boolean),
       },
       success: AnswerResponseSchema,
+      promptHint:
+        "Ask a natural language question to get a synthesized answer with source citations",
       description:
         "Answers natural language questions with GraphRAG context retrieval, synthesis, and source citations",
       http: [Http.post("/ask")],
@@ -191,6 +322,8 @@ export const KnowledgeAccessAgent = defineAgent({
     getOverview: method({
       params: {},
       success: KnowledgeBaseOverviewSchema,
+      promptHint:
+        "Retrieve knowledge base overview statistics including counts of documents, chunks, entities, and relations",
       description:
         "Returns statistical overview of the knowledge base (document count, chunk count, entity count, relationship count)",
       http: [Http.get("/overview")],
@@ -277,9 +410,7 @@ export const KnowledgeAccessAgent = defineAgent({
           const result = yield* graphRepo.getNeighborhood({
             seedEntityIds: [resolvedId],
             depth: maxDepth ?? 1,
-            relationTypes: relationTypes
-              ? Array.from(relationTypes)
-              : undefined,
+            relationTypes,
             minConfidence: minConfidence ?? 0.0,
           });
 
@@ -305,41 +436,31 @@ export const KnowledgeAccessAgent = defineAgent({
         Effect.gen(function* () {
           const entityRepo = yield* EntityRepository;
           const opt = yield* entityRepo.findById(id);
-          if (opt._tag === "None") {
-            return null;
-          }
-          const entity = opt.value;
-          return {
-            id: entity.id,
-            name: entity.name,
-            entityType: entity.entityType,
-            description: entity.description ?? null,
-            properties: entity.properties,
-            metadata: entity.metadata,
-          };
+          return opt.pipe(Option.map(mapEntityToResult), Option.getOrNull);
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-      getDocument: ({ id }) =>
+      getEntityDocuments: ({ id }) =>
         Effect.gen(function* () {
-          const docRepo = yield* DocumentRepository;
-          const opt = yield* docRepo.findDocumentById(id);
-          if (opt._tag === "None") {
-            return null;
-          }
-          const doc = opt.value;
-          return {
+          const entityRepo = yield* EntityRepository;
+          const resolvedId = yield* resolveEntityId(id, entityRepo);
+          const docs = yield* entityRepo.getRelatedDocuments(resolvedId);
+          return docs.map((doc) => ({
             id: doc.id,
             title: doc.title,
-            content: doc.content,
-            metadata: doc.metadata,
-            tags: doc.tags,
             source: doc.source,
             resourceName: doc.resourceName,
             sourceKey: doc.sourceKey,
             sizeBytes: doc.sizeBytes,
             createdAt: new Date(doc.createdAt).toISOString(),
             updatedAt: new Date(doc.updatedAt).toISOString(),
-          };
+          }));
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      getDocument: ({ id }) =>
+        Effect.gen(function* () {
+          const docRepo = yield* DocumentRepository;
+          const opt = yield* docRepo.findDocumentById(id);
+          return opt.pipe(Option.map(mapDocumentToResult), Option.getOrNull);
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
       graphRag: (query) =>
@@ -350,21 +471,12 @@ export const KnowledgeAccessAgent = defineAgent({
             topK: query.topK,
             maxHops: query.maxHops,
             minConfidence: query.minConfidence,
-            relationTypes: query.relationTypes
-              ? Array.from(query.relationTypes)
-              : undefined,
+            relationTypes: query.relationTypes,
           });
 
           return {
             query: bundle.query,
-            entities: bundle.entities.map((e) => ({
-              id: e.id,
-              name: e.name,
-              entityType: e.entityType,
-              description: e.description ?? null,
-              properties: e.properties,
-              metadata: e.metadata,
-            })),
+            entities: bundle.entities.map(mapEntityToResult),
             relationships: bundle.relationships.map((e) => ({
               sourceId: e.sourceId,
               targetId: e.targetId,
@@ -403,9 +515,7 @@ export const KnowledgeAccessAgent = defineAgent({
             sourceEntityId: resolvedSourceId,
             targetEntityId: resolvedTargetId,
             maxDepth: query.maxDepth,
-            relationTypes: query.relationTypes
-              ? Array.from(query.relationTypes)
-              : undefined,
+            relationTypes: query.relationTypes,
             direction: query.direction,
           });
 
@@ -471,14 +581,7 @@ export const KnowledgeAccessAgent = defineAgent({
             };
           });
 
-          const groundedEntities = bundle.entities.map((e) => ({
-            id: e.id,
-            name: e.name,
-            entityType: e.entityType,
-            description: e.description ?? null,
-            properties: e.properties,
-            metadata: e.metadata,
-          }));
+          const groundedEntities = bundle.entities.map(mapEntityToResult);
 
           const groundedRelationships = bundle.relationships.map((e) => ({
             sourceId: e.sourceId,
@@ -491,24 +594,7 @@ export const KnowledgeAccessAgent = defineAgent({
 
           let answer = "";
           if (generateAnswer) {
-            if (
-              bundle.relevantChunks.length > 0 ||
-              bundle.entities.length > 0
-            ) {
-              const entityList = bundle.entities
-                .slice(0, 5)
-                .map((e) => `${e.name} (${e.entityType})`)
-                .join(", ");
-              const entityPart = entityList
-                ? ` Key entities: ${entityList}.`
-                : "";
-              const chunkPart = bundle.relevantChunks[0]
-                ? ` Excerpt: "${bundle.relevantChunks[0].content.trim().slice(0, 200)}..."`
-                : "";
-              answer = `Grounded response for "${query}":${entityPart}${chunkPart}`;
-            } else {
-              answer = `No matching knowledge graph entities or documents found for query "${query}".`;
-            }
+            answer = synthesizeAnswerText(query, bundle);
           }
 
           const topScore = bundle.relevantChunks[0]?.score ?? 0.5;
@@ -551,11 +637,11 @@ export const KnowledgeAccessAgent = defineAgent({
             { concurrency: 5 },
           );
 
-          const lastSynchronizedAt = Option.isSome(lastSyncOpt)
-            ? lastSyncOpt.value.toISOString()
-            : null;
+          const lastSynchronizedAt = Option.map(lastSyncOpt, (d) =>
+            d.toISOString(),
+          ).pipe(Option.getOrNull);
 
-          const supportedSources = ["s3"];
+          const supportedSources = [...SourceTypeSchema.literals];
 
           return {
             totalDocuments,

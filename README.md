@@ -10,30 +10,42 @@ A durable, serverless Knowledge Graph and GraphRAG service built on [Golem Cloud
 flowchart TD
     subgraph External["External Systems"]
         S3["AWS S3 / RustFS<br/>(Document Storage)"]
+        Web["Public Web / Sitemaps<br/>(Documentation Sites)"]
         PG[("PostgreSQL + pgvector<br/>(Metadata, Vectors, Graph)")]
         LLM["Ollama / Embedding APIs<br/>(nomic-embed-text)"]
         Client["Frontend & Client Apps<br/>(Vue 3 / REST)"]
+        MCPClient["AI & MCP Clients<br/>(Claude Desktop / Cursor / Inspector)"]
     end
 
     subgraph Golem["Golem Cloud Runtime (WASM Component)"]
         GW["Golem HTTP Gateway<br/>(Domain & Route Mounts on :9006)"]
+        MCPGW["Golem MCP Gateway<br/>(Streamable HTTP on :9007)"]
 
         subgraph Agents["Agents"]
             Coord["IngestionCoordinatorAgent<br/>(Durable Singleton Orchestrator)"]
             S3Worker["S3IngestorTaskAgent<br/>(Durable Worker by Resource)"]
+            WebWorker["WebIngestorTaskAgent<br/>(Durable Worker by Resource)"]
             Access["KnowledgeAccessAgent<br/>(Ephemeral Query & GraphRAG Gateway)"]
         end
     end
 
     Client -->|HTTP REST| GW
+    MCPClient -->|Streamable HTTP /mcp| MCPGW
+    MCPGW --> Access
     GW --> Access
     GW --> Coord
     GW --> S3Worker
+    GW --> WebWorker
 
     Coord -->|"RPC: invoke sync()"| S3Worker
+    Coord -->|"RPC: invoke sync()"| WebWorker
     S3Worker -->|"Read Objects"| S3
     S3Worker -->|"Embeddings"| LLM
     S3Worker -->|"Store Chunks, Vectors, Entities, Edges"| PG
+
+    WebWorker -->|"Fetch HTML & Sitemaps"| Web
+    WebWorker -->|"Embeddings"| LLM
+    WebWorker -->|"Store Chunks, Vectors, Entities, Edges"| PG
 
     Access -->|"Vector Search, Hybrid RRF, Graph Queries"| PG
     Access -->|"Synthesize Answers"| LLM
@@ -46,6 +58,7 @@ flowchart TD
 | **Golem Cloud Runtime**          | WebAssembly host providing durable execution, automatic state recovery, transactional retry, and native HTTP routing.                                  |
 | **PostgreSQL + pgvector**        | Persistent store for raw documents, text chunks, vector embeddings, entities, graph edges, and sync checkpoints (`@golemcloud/effect-golem/postgres`). |
 | **S3 Storage (RustFS / AWS S3)** | Source document repositories scanned incrementally using ETag and timestamp checkpoints with AWS SigV4 authorization.                                  |
+| **Web / Documentation Sitemaps** | Public documentation sites and web pages discovered via `sitemap.xml` or seed URLs, fetched with native outbound HTTP and pure-TS HTML parsing (no native dependencies). |
 | **Ollama Embeddings**            | Generates 768-dimensional dense vector embeddings (`nomic-embed-text`) via OpenAI-compatible endpoints.                                                |
 
 ---
@@ -60,6 +73,7 @@ The ingestion pipeline converts source documents into a dual-representation know
 flowchart TD
     subgraph Ingress["1. Document Ingress"]
         S3["S3 Bucket / Object Storage"] -->|"Fetch markdown object"| RawDoc["Raw Document<br/>(RFC 4122 UUID v5, source, resourceName, sourceKey)"]
+        Web["Public Web / Sitemaps"] -->|"Fetch HTML & clean text"| RawDoc
         RawDoc -->|"Save record"| DocDB[("PostgreSQL: documents table<br/>(Satisfies FK constraint for chunks)")]
     end
 
@@ -92,7 +106,7 @@ flowchart TD
 
 ```
  ┌────────────────┐
- │  Raw Document  │ Source object from S3 (UUID v5, resourceName, sourceKey, title, metadata)
+ │  Raw Document  │ Source object from S3 or Web page (UUID v5, resourceName, sourceKey, title, metadata)
  └───────┬────────┘
          │
          ▼
@@ -103,7 +117,7 @@ flowchart TD
          │
          ▼
  ┌────────────────────────┐
- │ Document Chunker       │ Splits Markdown into overlapping chunks with header breadcrumbs
+ │ Document Chunker       │ Splits Markdown/text into overlapping chunks with header breadcrumbs
  └───────┬────────────────┘
          │
          ├───▶ DocumentChunk[]
@@ -132,7 +146,7 @@ flowchart TD
 
 #### Key Pipeline Stages:
 
-1. **Raw Document Ingress**: S3 objects are fetched and assigned an RFC 4122 UUID v5 derived deterministically from `(source, resourceName, sourceKey)`. The document is persisted in the `documents` table first to satisfy foreign key constraints.
+1. **Raw Document Ingress**: S3 objects (Markdown files) or public web pages (fetched via HTTP, stripped of boilerplate navigation, scripts, and styles with pure-TS parsing) are assigned an RFC 4122 UUID v5 derived deterministically from `(source, resourceName, sourceKey)`. The document is persisted in the `documents` table first to satisfy foreign key constraints.
 2. **Semantic Chunking**: Documents are split into semantic chunks respecting Markdown section hierarchy. Each chunk captures hierarchical heading breadcrumbs (e.g. `Architecture > Storage > Postgres`) for contextual relevance.
 3. **LLM Embedding Invocation**: Chunk text is sent to an embedding model (e.g. `nomic-embed-text` via Ollama or OpenAI-compatible endpoint) generating normalized 768-dimensional vector embeddings.
 4. **Entity & Relation Extraction**: Text chunks are parsed to identify domain entities, technology terms, acronyms, and semantic relationships using regex rules and linguistic patterns.
@@ -159,7 +173,7 @@ The PostgreSQL storage layer enforces strict relational integrity, vector simila
 
 Central supervisor managing sync schedules, webhook ingress, and dispatching tasks to worker agents.
 
-- **`POST /api/coordinator/sync`**: Triggers a manual sync run for a named S3 target.
+- **`POST /api/coordinator/sync`**: Triggers a manual sync run for a named resource (`s3` or `web`).
 - **`POST /api/coordinator/schedules`**: Registers or updates recurring cron sync schedules.
 - **`POST /api/coordinator/schedules/pause`**: Pauses recurring sync schedules for a typed resource.
 - **`POST /api/coordinator/schedules/resume`**: Resumes paused sync schedules for a typed resource.
@@ -173,9 +187,16 @@ Dedicated worker agent executing the ETL pipeline for a specific storage target 
 - **`POST /api/ingestion/s3/{resourceName}/sync`**: Discovers changed files in S3, parses Markdown, extracts headings/breadcrumbs, generates embeddings, extracts entity/relation triples, and commits to PostgreSQL.
 - **`GET /api/ingestion/s3/{resourceName}/status`**: Returns current sync metrics, processed ETags, and timestamps.
 - **`POST /api/ingestion/s3/{resourceName}/reset`**: Clears sync cursor to force a full re-index.
-- **`POST /api/ingestion/s3/{resourceName}/batch-callback`**: Webhook receiver for asynchronous external batch jobs.
 
-### 3. `KnowledgeAccessAgent` (Ephemeral / Stateless)
+### 3. `WebIngestorTaskAgent` (Durable)
+
+Dedicated worker agent executing the ETL pipeline for public web targets and documentation sitemaps (`golem-docs`, `effect-specs`).
+
+- **`POST /api/ingestion/web/{resourceName}/sync`**: Discovers pages via `sitemap.xml` or seed URLs, fetches HTML, cleans text/markdown, computes embeddings, extracts entities/relations, and commits to PostgreSQL.
+- **`GET /api/ingestion/web/{resourceName}/status`**: Returns current sync metrics, processed URLs, ETags, and timestamps.
+- **`POST /api/ingestion/web/{resourceName}/reset`**: Clears sync cursor to force a full re-index.
+
+### 4. `KnowledgeAccessAgent` (Ephemeral / Stateless)
 
 High-throughput query and retrieval interface exposing GraphRAG search, entity resolution, and graph traversal endpoints. Configured with `mode: "ephemeral"` for high concurrency.
 
@@ -186,8 +207,9 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 - **`POST /api/knowledge/entities/top`**: Retrieves top connected entities (graph hubs) sorted by degree (relationship count) and freshness.
 - **`POST /api/knowledge/neighborhood`**: Multi-hop topological graph traversal around seed entities. Supports human entity names (e.g. `"PostgreSQL"`), aliases (e.g. `"postgres"`), or IDs with transparent resolution, returning complete entity records without data redundancy.
 - **`POST /api/knowledge/paths`**: Relational shortest-path search between two entities. Supports natural entity names or IDs with transparent resolution and returns populated entity lookup pools.
-- **`GET /api/knowledge/overview`**: Summary counts (documents, chunks, entities, relationships, last sync).
+- **`GET /api/knowledge/overview`**: Summary counts (documents, chunks, entities, relationships, supported sources `["s3", "web"]`, last sync timestamp).
 - **`GET /api/knowledge/entities/{id}`**: Entity metadata, attributes, and known aliases.
+- **`GET /api/knowledge/entities/{id}/documents`**: Summary list of all documents referencing or associated with an entity.
 - **`GET /api/knowledge/documents/{id}`**: Raw document content, title, and metadata.
 
 ---
@@ -196,8 +218,9 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 
 | Agent           | Method | Route                                                  | Description                                                    |
 | :-------------- | :----- | :----------------------------------------------------- | :------------------------------------------------------------- |
-| **Knowledge**   | `GET`  | `/api/knowledge/overview`                              | Knowledge base statistics                                      |
+| **Knowledge**   | `GET`  | `/api/knowledge/overview`                              | Knowledge base statistics & supported sources                  |
 | **Knowledge**   | `GET`  | `/api/knowledge/entities/{id}`                         | Entity lookup by ID                                            |
+| **Knowledge**   | `GET`  | `/api/knowledge/entities/{id}/documents`               | Document summaries associated with an entity                   |
 | **Knowledge**   | `GET`  | `/api/knowledge/documents/{id}`                        | Document lookup by ID                                          |
 | **Knowledge**   | `POST` | `/api/knowledge/entities/search`                       | Entity autocomplete / search by prefix, name, or alias         |
 | **Knowledge**   | `POST` | `/api/knowledge/entities/top`                          | Top connected entities (graph hubs) sorted by degree           |
@@ -212,10 +235,65 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 | **Coordinator** | `POST` | `/api/coordinator/schedules/pause`                     | Pause sync schedule for a resource                             |
 | **Coordinator** | `POST` | `/api/coordinator/schedules/resume`                    | Resume paused sync schedule for a resource                     |
 | **Coordinator** | `POST` | `/api/coordinator/webhook/{sourceType}/{resourceName}` | Webhook ingress                                                |
-| **Ingestor**    | `GET`  | `/api/ingestion/s3/{resourceName}/status`              | Ingestor status and checkpoint                                 |
-| **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/sync`                | Trigger S3 resource sync                                       |
-| **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/reset`               | Reset cursor for full rescan                                   |
-| **Ingestor**    | `POST` | `/api/ingestion/s3/{resourceName}/batch-callback`      | External batch job callback                                    |
+| **Ingestor (S3)** | `GET`  | `/api/ingestion/s3/{resourceName}/status`              | Ingestor status and checkpoint                                 |
+| **Ingestor (S3)** | `POST` | `/api/ingestion/s3/{resourceName}/sync`                | Trigger S3 resource sync                                       |
+| **Ingestor (S3)** | `POST` | `/api/ingestion/s3/{resourceName}/reset`               | Reset cursor for full rescan                                   |
+| **Ingestor (Web)**| `GET`  | `/api/ingestion/web/{resourceName}/status`             | Web Ingestor status and checkpoint                             |
+| **Ingestor (Web)**| `POST` | `/api/ingestion/web/{resourceName}/sync`               | Trigger Web resource sync                                      |
+| **Ingestor (Web)**| `POST` | `/api/ingestion/web/{resourceName}/reset`              | Reset cursor for full rescan                                   |
+
+---
+
+## Model Context Protocol (MCP) Server
+
+`KnowledgeAccessAgent` is natively exposed as a **Model Context Protocol (MCP) server** with Golem's Streamable HTTP transport on port **`9007`**. Any MCP-compliant client (Claude Desktop, Cursor, MCP Inspector, custom agents) can connect directly to:
+
+```
+http://localhost:9007/mcp
+```
+
+### Exposed MCP Tools & Resources
+
+All methods on `KnowledgeAccessAgent` are automatically registered as MCP entities with descriptive prompts and discovery hints:
+
+| MCP Entity | Type | MCP Identifier | Description |
+| :--- | :--- | :--- | :--- |
+| `search` | **Tool** | `KnowledgeAccessAgent-search` | Search ingested documents using hybrid, semantic vector, or keyword search |
+| `searchEntities` | **Tool** | `KnowledgeAccessAgent-searchEntities` | Search knowledge graph entities by name, alias, or keyword |
+| `getTopEntities` | **Tool** | `KnowledgeAccessAgent-getTopEntities` | List top connected hub entities in the knowledge graph sorted by connectivity degree |
+| `getNeighborhood` | **Tool** | `KnowledgeAccessAgent-getNeighborhood` | Traverse and explore relationships and neighboring entities around an entity |
+| `getEntity` | **Tool** | `KnowledgeAccessAgent-getEntity` | Look up an entity's details and properties by its exact ID |
+| `getEntityDocuments` | **Tool** | `KnowledgeAccessAgent-getEntityDocuments` | Retrieve summary list of all documents associated with an entity |
+| `getDocument` | **Tool** | `KnowledgeAccessAgent-getDocument` | Retrieve raw document content and metadata by ID |
+| `graphRag` | **Tool** | `KnowledgeAccessAgent-graphRag` | Execute GraphRAG retrieval returning structured context and synthesized prompt |
+| `findPaths` | **Tool** | `KnowledgeAccessAgent-findPaths` | Find multi-hop relational paths connecting two entities in the graph |
+| `ask` | **Tool** | `KnowledgeAccessAgent-ask` | Ask a natural language question to get a synthesized answer with source citations |
+| `getOverview` | **Resource** | `KnowledgeAccessAgent-getOverview` | Read knowledge base statistics (document, chunk, entity, edge counts, and supported sources) |
+
+### Client Configuration
+
+#### Claude Desktop (`claude_desktop_config.json`)
+
+Configure Claude Desktop to access your Golem Knowledge Graph:
+
+```json
+{
+  "mcpServers": {
+    "golem-kgs": {
+      "url": "http://localhost:9007/mcp"
+    }
+  }
+}
+```
+
+#### MCP Inspector (Interactive Testing)
+
+Test tools, inspect schema definitions, and execute invocations in the browser:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+Connect using transport **Streamable HTTP** with URL `http://localhost:9007/mcp`.
 
 ---
 
@@ -276,7 +354,38 @@ secretDefaults:
 - **`bucket` / `prefixes`**: Target bucket and optional key prefixes to scan incrementally.
 - **`accessKeyId` / `secretAccessKey`**: S3 credentials (authenticated with AWS SigV4).
 
-### 3. Entity & Relation Extraction Rules
+### 3. Web & Documentation Resources
+
+Configured under `secretDefaults.local.resources.web` as an array of named web targets:
+
+```yaml
+secretDefaults:
+  local:
+    resources:
+      web:
+        - name: "golem-docs"
+          baseUrl: "https://learn.golem.cloud"
+          sitemapUrl: "https://learn.golem.cloud/sitemap.xml"
+          includePatterns:
+            - "^https://learn\\.golem\\.cloud/.*"
+          excludePatterns:
+            - "^https://learn\\.golem\\.cloud/api/.*"
+        - name: "effect-specs"
+          baseUrl: "https://raw.githubusercontent.com"
+          seedUrls:
+            - "https://raw.githubusercontent.com/golemcloud/effect-golem/main/README.md"
+            - "https://raw.githubusercontent.com/golemcloud/golem/main/README.md"
+```
+
+- **`name`**: Unique resource identifier used by `WebIngestorTaskAgent` (e.g. `/api/ingestion/web/{resourceName}/sync`).
+- **`baseUrl`**: Base domain URL for resolving relative links and page discovery.
+- **`sitemapUrl`**: Optional URL to an XML sitemap or nested sitemap index for automated URL discovery.
+- **`seedUrls`**: Optional list of explicit entrypoint URLs to crawl directly.
+- **`includePatterns`**: Optional regex patterns; only matching URLs will be fetched and processed.
+- **`excludePatterns`**: Optional regex patterns to bypass unwanted routes (e.g. API docs, binary downloads).
+- **`headers`**: Optional custom HTTP request headers (e.g. `User-Agent`, authorization).
+
+### 4. Entity & Relation Extraction Rules
 
 Configured under `components.golem-kgs-effect:effect-main.config.extraction`:
 
@@ -335,7 +444,7 @@ components:
           - "In Addition"
 ```
 
-### 4. HTTP API Gateway Deployment
+### 5. HTTP API Gateway Deployment
 
 Configured under `httpApi.deployments.local`:
 
@@ -348,11 +457,27 @@ httpApi:
           KnowledgeAccessAgent: {}
           IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
+          WebIngestorTaskAgent: {}
 ```
 
 Routes all agent APIs through a unified HTTP reverse proxy on `http://localhost:9006`.
 
-### 5. Environment Variables Reference
+### 6. Model Context Protocol (MCP) Server Deployment
+
+Configured under `mcp.deployments.local`:
+
+```yaml
+mcp:
+  deployments:
+    local:
+      - domain: localhost:9007
+        agents:
+          KnowledgeAccessAgent: {}
+```
+
+Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HTTP transport on port `9007` (`http://localhost:9007/mcp`).
+
+### 7. Environment Variables Reference
 
 | Variable                | Description                          | Default / Local Example     |
 | :---------------------- | :----------------------------------- | :-------------------------- |
@@ -421,7 +546,7 @@ set -a && source .env && set +a
 golem deploy --redeploy-agents --yes
 ```
 
-The Golem HTTP Gateway will be active on **`http://localhost:9006`**.
+The Golem HTTP Gateway will be active on **`http://localhost:9006`**, and the Golem MCP Gateway will be active on **`http://localhost:9007/mcp`**.
 
 ### 4. Start Frontend
 
@@ -445,6 +570,34 @@ Open **`http://localhost:5173`** to interact with the Knowledge Graph, Search, a
 curl -X POST 'http://localhost:9006/api/ingestion/s3/main/sync' \
   -H 'Content-Type: application/json' \
   -d '{"force": false}'
+```
+
+### Synchronize Web Documentation Pages
+
+```bash
+# Trigger web crawl and ingestion sync
+curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/sync' \
+  -H 'Content-Type: application/json' \
+  -d '{"force": false}'
+
+# Inspect web ingestion metrics and checkpoints
+curl -s 'http://localhost:9006/api/ingestion/web/golem-docs/status'
+
+# Reset cursor to force full re-index
+curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/reset'
+```
+
+### Trigger Sync via Coordinator Agent
+
+```bash
+# Dispatches sync job to the appropriate worker agent (s3 or web)
+curl -X POST 'http://localhost:9006/api/coordinator/sync' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sourceType": "web",
+    "resourceName": "golem-docs",
+    "force": false
+  }'
 ```
 
 ### GraphRAG Question Answering
@@ -525,3 +678,22 @@ curl -s --url 'http://localhost:9006/api/knowledge/graphrag' \
     "maxHops": 2
   }'
 ```
+
+### Entity Related Documents
+
+```bash
+# Retrieve summary list of all documents linked to an entity
+curl -s http://localhost:9006/api/knowledge/entities/golem-cloud/documents
+```
+
+### Test MCP Server with MCP Inspector
+
+```bash
+# Launch MCP Inspector in browser
+npx @modelcontextprotocol/inspector
+```
+
+In the MCP Inspector UI, connect with:
+- **Transport**: `Streamable HTTP`
+- **URL**: `http://localhost:9007/mcp`
+

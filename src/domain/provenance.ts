@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 export const SourceType = Schema.Literals([
   "s3",
+  "web",
   "filesystem",
   "slack",
   "confluence",
@@ -36,3 +37,15 @@ export const RawDocument = Schema.Struct({
   updatedAt: Schema.Date,
 });
 export type RawDocument = typeof RawDocument.Type;
+
+export const DocumentSummary = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  source: Schema.String,
+  resourceName: Schema.String,
+  sourceKey: Schema.String,
+  sizeBytes: Schema.Number,
+  createdAt: Schema.Date,
+  updatedAt: Schema.Date,
+});
+export type DocumentSummary = typeof DocumentSummary.Type;

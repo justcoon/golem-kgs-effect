@@ -1,7 +1,11 @@
 import { Effect, Option } from "effect";
-import { type S3TaskMetrics, type S3TaskState } from "../agents/types.js";
-import { type S3CursorData } from "../connectors/connector-base.js";
-import { S3ConnectorService } from "../connectors/s3-connector.js";
+import {
+  type WebProcessedUrlEntry,
+  type WebTaskMetrics,
+  type WebTaskState,
+} from "../agents/types.js";
+import { type WebCursorData } from "../connectors/connector-base.js";
+import { WebConnectorService } from "../connectors/web-connector.js";
 import { processAndIndexDocument } from "./document-processor.js";
 import { EmbeddingService } from "./embedding-service.js";
 import { EntityResolverService } from "./entity-resolver.js";
@@ -12,26 +16,26 @@ import {
   DocumentRepository,
 } from "../storage/repository-tags.js";
 
-export interface IngestionRunResult {
+export interface WebIngestionRunResult {
   readonly status: "COMPLETED" | "FAILED";
   readonly lastSyncTimestamp: string | null;
-  readonly processedKeys: Record<string, string>;
+  readonly processedUrls: Record<string, WebProcessedUrlEntry>;
   readonly cursor: string | null;
-  readonly metrics: S3TaskMetrics;
+  readonly metrics: WebTaskMetrics;
   readonly errorMessage: string | null;
 }
 
 /**
- * Core orchestration logic for S3 ingestion task.
+ * Core orchestration logic for Web Page / Documentation ingestion task.
  */
-export function runS3Ingestion(
+export function runWebIngestion(
   resourceName: string,
-  currentState: S3TaskState,
+  currentState: WebTaskState,
   options?: { force?: boolean },
 ): Effect.Effect<
-  IngestionRunResult,
+  WebIngestionRunResult,
   never,
-  | S3ConnectorService
+  | WebConnectorService
   | DocumentRepository
   | ChunkRepository
   | CheckpointRepository
@@ -43,25 +47,24 @@ export function runS3Ingestion(
     const startTime = Date.now();
     const force = options?.force ?? false;
 
-    const s3Service = yield* S3ConnectorService;
+    const webService = yield* WebConnectorService;
     const checkpointRepo = yield* CheckpointRepository;
 
-    const connector = yield* s3Service.createConnector(resourceName);
+    const connector = yield* webService.createConnector(resourceName);
 
-    const cursorData: Option.Option<S3CursorData> =
+    const cursorData: Option.Option<WebCursorData> =
       force || !currentState.lastSyncTimestamp
         ? Option.none()
         : Option.some({
             lastSyncTimestamp: currentState.lastSyncTimestamp,
-            processedKeys: currentState.processedKeys,
-            continuationToken: currentState.cursor ?? undefined,
+            processedUrls: currentState.processedUrls,
           });
 
     const discoveredItems = yield* connector.discover(cursorData);
 
-    const newProcessedKeys: Record<string, string> = force
+    const newProcessedUrls: Record<string, WebProcessedUrlEntry> = force
       ? {}
-      : { ...currentState.processedKeys };
+      : { ...currentState.processedUrls };
 
     let syncedCount = 0;
     let failedCount = 0;
@@ -71,7 +74,21 @@ export function runS3Ingestion(
         Effect.gen(function* () {
           const { document } = yield* connector.fetch(item);
           yield* processAndIndexDocument(document);
-          newProcessedKeys[item.id] = item.eTag ?? "";
+
+          const meta = (document.metadata ?? {}) as Record<string, unknown>;
+          newProcessedUrls[item.id] = {
+            url: item.id,
+            etag: typeof meta.etag === "string" ? meta.etag : undefined,
+            lastModified:
+              typeof meta.lastModified === "string"
+                ? meta.lastModified
+                : undefined,
+            contentHash:
+              typeof meta.contentHash === "string"
+                ? meta.contentHash
+                : undefined,
+            syncedAt: new Date().toISOString(),
+          };
           syncedCount++;
         }),
         {
@@ -79,6 +96,7 @@ export function runS3Ingestion(
           onSuccess: () => true,
         },
       );
+
       if (!ok) {
         failedCount++;
       }
@@ -89,10 +107,10 @@ export function runS3Ingestion(
 
     yield* checkpointRepo
       .saveCheckpoint({
-        connectorId: `s3_${resourceName}`,
+        connectorId: `web_${resourceName}`,
         cursorData: {
           lastSyncTimestamp: nowIso,
-          processedKeys: newProcessedKeys,
+          processedUrls: newProcessedUrls,
         },
         status: failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED",
         metrics: {
@@ -108,13 +126,13 @@ export function runS3Ingestion(
       failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED";
     const errorMessage =
       status === "FAILED"
-        ? `Failed to ingest all ${failedCount} discovered items from resource ${resourceName}`
+        ? `Failed to ingest all ${failedCount} discovered web pages from resource ${resourceName}`
         : null;
 
     return {
       status,
       lastSyncTimestamp: nowIso,
-      processedKeys: newProcessedKeys,
+      processedUrls: newProcessedUrls,
       cursor: null,
       metrics: {
         totalDiscovered:
@@ -130,7 +148,7 @@ export function runS3Ingestion(
       Effect.succeed({
         status: "FAILED" as const,
         lastSyncTimestamp: currentState.lastSyncTimestamp,
-        processedKeys: currentState.processedKeys,
+        processedUrls: currentState.processedUrls,
         cursor: currentState.cursor,
         metrics: {
           ...currentState.metrics,

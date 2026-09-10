@@ -101,6 +101,17 @@ export interface DocumentResult {
   updatedAt: string;
 }
 
+export interface DocumentSummary {
+  id: string;
+  title: string;
+  source: string;
+  resourceName: string;
+  sourceKey: string;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface GraphRAGContextBundle {
   query: string;
   entities: EntityResult[];

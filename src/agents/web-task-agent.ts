@@ -1,40 +1,37 @@
 import { Effect, Ref, Schema } from "effect";
 import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 import {
-  S3TaskStateSchema,
-  S3TaskStatusResponseSchema,
-  type S3TaskState,
-  type S3TaskStatusResponse,
+  WebTaskStateSchema,
+  WebTaskStatusResponseSchema,
+  type WebTaskState,
+  type WebTaskStatusResponse,
 } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
-import { runS3Ingestion } from "../pipeline/s3-ingestion-pipeline.js";
+import { runWebIngestion } from "../pipeline/web-ingestion-pipeline.js";
 
-const toStatusResponse = (s: S3TaskState): S3TaskStatusResponse => ({
+const toStatusResponse = (s: WebTaskState): WebTaskStatusResponse => ({
   resourceName: s.resourceName,
   status: s.status,
   lastSyncTimestamp: s.lastSyncTimestamp,
-  processedKeys: Object.entries(s.processedKeys).map(([key, etag]) => ({
-    key,
-    etag,
-  })),
+  processedUrls: Object.values(s.processedUrls),
   cursor: s.cursor,
   metrics: s.metrics,
   errorMessage: s.errorMessage,
 });
 
-export const S3IngestorTaskAgent = defineAgent({
-  name: "S3IngestorTaskAgent",
+export const WebIngestorTaskAgent = defineAgent({
+  name: "WebIngestorTaskAgent",
   description:
-    "Durable S3 ingestion task worker bound 1:1 to an S3 resource target",
+    "Durable Web Page / Documentation ingestion task worker bound 1:1 to a web resource target",
   mode: "durable",
   config: AppAgentConfig,
   constructorParams: {
     resourceName: Schema.String,
   },
-  http: Http.mount("/api/ingestion/s3/{resourceName}", { cors: ["*"] }),
+  http: Http.mount("/api/ingestion/web/{resourceName}", { cors: ["*"] }),
   snapshot: Snapshot.define({
-    schema: S3TaskStateSchema,
+    schema: WebTaskStateSchema,
     policy: Snapshot.policy.everyN(5),
   }),
   methods: {
@@ -42,20 +39,20 @@ export const S3IngestorTaskAgent = defineAgent({
       params: {
         force: Schema.optional(Schema.Boolean),
       },
-      success: S3TaskStatusResponseSchema,
+      success: WebTaskStatusResponseSchema,
       description:
-        "Executes full or incremental synchronization of the bound S3 resource",
+        "Executes full or incremental synchronization of the bound Web resource",
       http: [Http.post("/sync")],
     }),
     getStatus: method({
       params: {},
-      success: S3TaskStatusResponseSchema,
+      success: WebTaskStatusResponseSchema,
       description: "Returns the current synchronization state and metrics",
       http: [Http.get("/status")],
     }),
     resetCursor: method({
       params: {},
-      success: S3TaskStatusResponseSchema,
+      success: WebTaskStatusResponseSchema,
       description:
         "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
@@ -70,7 +67,7 @@ export const S3IngestorTaskAgent = defineAgent({
       resourceName,
       status: "IDLE",
       lastSyncTimestamp: null,
-      processedKeys: {},
+      processedUrls: {},
       cursor: null,
       metrics: {
         totalDiscovered: 0,
@@ -81,7 +78,7 @@ export const S3IngestorTaskAgent = defineAgent({
       errorMessage: null,
     });
 
-    yield* Effect.logInfo("S3IngestorTaskAgent initialized").pipe(
+    yield* Effect.logInfo("WebIngestorTaskAgent initialized").pipe(
       Effect.annotateLogs({ resourceName }),
     );
 
@@ -96,7 +93,7 @@ export const S3IngestorTaskAgent = defineAgent({
 
           const currentState = yield* Ref.get(state);
 
-          const result = yield* runS3Ingestion(resourceName, currentState, {
+          const result = yield* runWebIngestion(resourceName, currentState, {
             force,
           }).pipe(Effect.provide(pipelineLayer));
 
@@ -104,7 +101,7 @@ export const S3IngestorTaskAgent = defineAgent({
             ...s,
             status: result.status,
             lastSyncTimestamp: result.lastSyncTimestamp,
-            processedKeys: result.processedKeys,
+            processedUrls: result.processedUrls,
             cursor: result.cursor,
             metrics: result.metrics,
             errorMessage: result.errorMessage,
@@ -118,7 +115,7 @@ export const S3IngestorTaskAgent = defineAgent({
         Ref.updateAndGet(state, (s) => ({
           ...s,
           lastSyncTimestamp: null,
-          processedKeys: {},
+          processedUrls: {},
           cursor: null,
           status: "IDLE" as const,
           errorMessage: null,

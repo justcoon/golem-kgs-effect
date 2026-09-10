@@ -56,9 +56,26 @@ export class EntityResolverService extends Context.Service<
             const candConf = Number(candidate.metadata?.confidence ?? 0.8);
             const newConf = fuseConfidence(oldConf, candConf);
 
+            const existingProps =
+              (existing.properties as Record<string, unknown>) ?? {};
+            const candidateProps =
+              (candidate.properties as Record<string, unknown>) ?? {};
+            const existingDocs = Array.isArray(existingProps.documents)
+              ? (existingProps.documents as string[])
+              : typeof existingProps.extractedFromDocument === "string"
+                ? [existingProps.extractedFromDocument]
+                : [];
+            const candidateDoc = candidateProps.extractedFromDocument;
+            const mergedDocs =
+              typeof candidateDoc === "string" &&
+              !existingDocs.includes(candidateDoc)
+                ? [...existingDocs, candidateDoc]
+                : existingDocs;
+
             const mergedProperties = {
-              ...((existing.properties as Record<string, unknown>) ?? {}),
-              ...((candidate.properties as Record<string, unknown>) ?? {}),
+              ...existingProps,
+              ...candidateProps,
+              documents: mergedDocs,
             };
 
             const updatedOpt = yield* entityRepo.updateEntity(existing.id, {
@@ -69,7 +86,7 @@ export class EntityResolverService extends Context.Service<
                 lastObservedAt: new Date().toISOString(),
               },
             });
-            return Option.isSome(updatedOpt) ? updatedOpt.value : existing;
+            return Option.getOrElse(updatedOpt, () => existing);
           }
 
           // 2. Try finding by Alias
@@ -80,9 +97,26 @@ export class EntityResolverService extends Context.Service<
             const candConf = Number(candidate.metadata?.confidence ?? 0.8);
             const newConf = fuseConfidence(oldConf, candConf);
 
+            const existingProps =
+              (existing.properties as Record<string, unknown>) ?? {};
+            const candidateProps =
+              (candidate.properties as Record<string, unknown>) ?? {};
+            const existingDocs = Array.isArray(existingProps.documents)
+              ? (existingProps.documents as string[])
+              : typeof existingProps.extractedFromDocument === "string"
+                ? [existingProps.extractedFromDocument]
+                : [];
+            const candidateDoc = candidateProps.extractedFromDocument;
+            const mergedDocs =
+              typeof candidateDoc === "string" &&
+              !existingDocs.includes(candidateDoc)
+                ? [...existingDocs, candidateDoc]
+                : existingDocs;
+
             const mergedProperties = {
-              ...((existing.properties as Record<string, unknown>) ?? {}),
-              ...((candidate.properties as Record<string, unknown>) ?? {}),
+              ...existingProps,
+              ...candidateProps,
+              documents: mergedDocs,
             };
 
             const updatedOpt = yield* entityRepo.updateEntity(existing.id, {
@@ -93,11 +127,21 @@ export class EntityResolverService extends Context.Service<
                 lastObservedAt: new Date().toISOString(),
               },
             });
-            return Option.isSome(updatedOpt) ? updatedOpt.value : existing;
+            return Option.getOrElse(updatedOpt, () => existing);
           }
 
           // 3. No match found, create/upsert new canonical entity
-          return yield* entityRepo.upsertEntity(candidate);
+          const initialDocs =
+            typeof candidate.properties?.extractedFromDocument === "string"
+              ? [candidate.properties.extractedFromDocument]
+              : [];
+          return yield* entityRepo.upsertEntity({
+            ...candidate,
+            properties: {
+              ...(candidate.properties ?? {}),
+              documents: initialDocs,
+            },
+          });
         });
 
       const fuseKnowledge = (

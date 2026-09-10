@@ -5,20 +5,18 @@ import path from "node:path";
 import { Schema } from "effect";
 import {
   AnswerResponseSchema,
-  BatchJobCallbackResultSchema,
   CoordinatorStateSchema,
+  DocumentSummarySchema,
   EntityResultSchema,
   EntitySearchRequestSchema,
   EntitySearchResponseSchema,
   KnowledgeBaseOverviewSchema,
   NeighborhoodResponseSchema,
-  OneShotWebhookHandleResponseSchema,
   PathFindingResultSchema,
   SearchResponseSchema,
   SyncScheduleSchema,
   TaskRunSummarySchema,
   WebhookIngestPayloadSchema,
-  type BatchJobCallbackResult,
   type WebhookIngestPayload,
 } from "../src/agents/types.js";
 
@@ -60,8 +58,32 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         "S3IngestorTaskAgent must be deployed",
       );
       assert.ok(
+        manifestContent.includes("WebIngestorTaskAgent:"),
+        "WebIngestorTaskAgent must be deployed",
+      );
+      assert.ok(
         !manifestContent.includes("Counter:"),
         "Counter must not be deployed",
+      );
+    });
+
+    it("should correctly configure mcp.deployments.local with domain localhost:9007 and KnowledgeAccessAgent", () => {
+      const manifestPath = path.resolve(process.cwd(), "golem.yaml");
+      const manifestContent = fs.readFileSync(manifestPath, "utf-8");
+
+      assert.ok(
+        manifestContent.includes("mcp:"),
+        "mcp section must be defined in golem.yaml",
+      );
+      assert.ok(
+        manifestContent.includes("domain: localhost:9007") ||
+          manifestContent.includes("localhost:9007"),
+        "mcp local domain must be configured on port 9007",
+      );
+      const mcpSection = manifestContent.split("mcp:")[1] ?? "";
+      assert.ok(
+        mcpSection.includes("KnowledgeAccessAgent:"),
+        "KnowledgeAccessAgent must be configured under mcp deployments",
       );
     });
   });
@@ -97,72 +119,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         });
       });
     });
-
-    describe("BatchJobCallbackResultSchema", () => {
-      it("should decode a successful batch job callback", () => {
-        const raw = {
-          jobId: "job-ocr-12345",
-          status: "COMPLETED",
-          processedItems: 42,
-          details: "All pages processed without errors",
-        };
-
-        const decoded: BatchJobCallbackResult = Schema.decodeUnknownSync(
-          BatchJobCallbackResultSchema,
-        )(raw);
-        assert.equal(decoded.jobId, "job-ocr-12345");
-        assert.equal(decoded.status, "COMPLETED");
-        assert.equal(decoded.processedItems, 42);
-        assert.equal(decoded.details, "All pages processed without errors");
-      });
-
-      it("should decode a failed batch job callback without details", () => {
-        const raw = {
-          jobId: "job-export-999",
-          status: "FAILED",
-          processedItems: 0,
-        };
-
-        const decoded = Schema.decodeUnknownSync(BatchJobCallbackResultSchema)(
-          raw,
-        );
-        assert.equal(decoded.jobId, "job-export-999");
-        assert.equal(decoded.status, "FAILED");
-        assert.equal(decoded.processedItems, 0);
-        assert.equal(decoded.details, undefined);
-      });
-
-      it("should reject an invalid status string", () => {
-        const raw = {
-          jobId: "job-invalid",
-          status: "UNKNOWN_STATUS",
-          processedItems: 10,
-        };
-        assert.throws(() => {
-          Schema.decodeUnknownSync(BatchJobCallbackResultSchema)(raw);
-        });
-      });
-    });
-
-    describe("OneShotWebhookHandleResponseSchema", () => {
-      it("should decode a one-shot webhook registration response", () => {
-        const raw = {
-          callbackUrl:
-            "https://golem-kgs-effect.localhost:9006/webhooks/hook-abc-123",
-          instructions:
-            "POST JSON completion payload to callbackUrl within 300 seconds",
-        };
-
-        const decoded = Schema.decodeUnknownSync(
-          OneShotWebhookHandleResponseSchema,
-        )(raw);
-        assert.equal(
-          decoded.callbackUrl,
-          "https://golem-kgs-effect.localhost:9006/webhooks/hook-abc-123",
-        );
-        assert.ok(decoded.instructions.includes("POST JSON"));
-      });
-    });
   });
 
   describe("HTTP Gateway Route Routing & Parameter Extraction", () => {
@@ -193,6 +149,17 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
     it("should match KnowledgeAccessAgent entity lookup route: /api/knowledge/entities/{id}", () => {
       const pattern = "/api/knowledge/entities/{id}";
       const params = matchRoute(pattern, "/api/knowledge/entities/ent_golem_1");
+
+      assert.ok(params !== null);
+      assert.equal(params?.id, "ent_golem_1");
+    });
+
+    it("should match KnowledgeAccessAgent entity documents route: /api/knowledge/entities/{id}/documents", () => {
+      const pattern = "/api/knowledge/entities/{id}/documents";
+      const params = matchRoute(
+        pattern,
+        "/api/knowledge/entities/ent_golem_1/documents",
+      );
 
       assert.ok(params !== null);
       assert.equal(params?.id, "ent_golem_1");
@@ -253,15 +220,23 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(params?.resourceName, "technical");
     });
 
-    it("should match S3IngestorTaskAgent batch callback route: /api/ingestion/s3/{resourceName}/batch-callback", () => {
-      const pattern = "/api/ingestion/s3/{resourceName}/batch-callback";
+    it("should match WebIngestorTaskAgent sync route: /api/ingestion/web/{resourceName}/sync", () => {
+      const pattern = "/api/ingestion/web/{resourceName}/sync";
+      const params = matchRoute(pattern, "/api/ingestion/web/golem-docs/sync");
+
+      assert.ok(params !== null);
+      assert.equal(params?.resourceName, "golem-docs");
+    });
+
+    it("should match WebIngestorTaskAgent status route: /api/ingestion/web/{resourceName}/status", () => {
+      const pattern = "/api/ingestion/web/{resourceName}/status";
       const params = matchRoute(
         pattern,
-        "/api/ingestion/s3/legal-contracts/batch-callback",
+        "/api/ingestion/web/golem-docs/status",
       );
 
       assert.ok(params !== null);
-      assert.equal(params?.resourceName, "legal-contracts");
+      assert.equal(params?.resourceName, "golem-docs");
     });
   });
 
@@ -336,6 +311,29 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(decoded.aggregatedMetrics.totalRunsTriggered, 15);
       assert.equal(decoded.aggregatedMetrics.totalSuccesses, 14);
       assert.equal(decoded.schedules["s3:main"].status, "ACTIVE");
+    });
+
+    it("should validate DocumentSummarySchema for GET /api/knowledge/entities/{id}/documents", () => {
+      const summaryRaw = {
+        id: "doc_web_1",
+        title: "Golem Quickstart",
+        source: "web",
+        resourceName: "golem-docs",
+        sourceKey: "https://learn.golem.cloud/v1.5/quickstart",
+        sizeBytes: 4096,
+        createdAt: "2026-09-10T10:00:00.000Z",
+        updatedAt: "2026-09-10T10:00:00.000Z",
+      };
+
+      const decoded = Schema.decodeUnknownSync(DocumentSummarySchema)(
+        summaryRaw,
+      );
+      assert.equal(decoded.id, "doc_web_1");
+      assert.equal(
+        decoded.sourceKey,
+        "https://learn.golem.cloud/v1.5/quickstart",
+      );
+      assert.equal(decoded.sizeBytes, 4096);
     });
 
     it("should validate SearchResponseSchema for POST /api/knowledge/search", () => {

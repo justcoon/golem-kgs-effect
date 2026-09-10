@@ -6,6 +6,7 @@ import type {
   EntityResult,
   EntitySearchResponse,
   DocumentResult,
+  DocumentSummary,
   NeighborhoodResponse,
   PathFindingResult,
 } from '../types/api';
@@ -144,6 +145,22 @@ export const ApiService = {
     if (response.status === 404) return null;
     const entity = await handleResponse<EntityResult>(response);
     return entity ? normalizeEntity(entity) : null;
+  },
+
+  /**
+   * Retrieves summary list of all documents associated with an entity.
+   */
+  async getEntityDocuments(entityId: string): Promise<DocumentSummary[]> {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/entities/${encodeURIComponent(entityId)}/documents`
+      );
+      if (response.status === 404) return [];
+      const docs = await handleResponse<DocumentSummary[]>(response);
+      return docs || [];
+    } catch {
+      return [];
+    }
   },
 
   /**

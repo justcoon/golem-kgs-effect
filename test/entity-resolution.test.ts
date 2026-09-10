@@ -20,6 +20,8 @@ function createMockEntityRepo(
         const found = entities.find((e) => e.id === id);
         return found ? Option.some(found) : Option.none();
       }),
+    findByIds: (ids: ReadonlyArray<string>) =>
+      Effect.sync(() => entities.filter((e) => ids.includes(e.id))),
     findByName: (name: string) =>
       Effect.sync(() => {
         const lower = name.toLowerCase();

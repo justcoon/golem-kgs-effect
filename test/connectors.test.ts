@@ -46,6 +46,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
               secretAccessKey: "rustfsadmin123",
             },
           ],
+          web: [],
         }),
       };
 

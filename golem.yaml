@@ -25,20 +25,13 @@ secretDefaults:
             - "general/"
           accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
           secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
-#       - name: "legal"
-#         endpoint: "{{ S3_ENDPOINT_URL }}"
-#         region: "{{ AWS_DEFAULT_REGION }}"
-#         bucket: "legal-docs"
-#         accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
-#         secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
-#       - name: "technical"
-#         endpoint: "{{ S3_ENDPOINT_URL }}"
-#         region: "{{ AWS_DEFAULT_REGION }}"
-#         bucket: "technical-docs"
-#         prefixes:
-#           - "architecture/"
-#         accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
-#         secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
+      web:
+        - name: "golem-docs"
+          baseUrl: "https://learn.golem.cloud"
+          seedUrls:
+            - "https://learn.golem.cloud"
+          includePatterns:
+            - "/v1.5/"
 
 
 components:
@@ -133,6 +126,18 @@ components:
           - "The Following"
           - "For Example"
           - "In Addition"
+          - "Why"
+          - "How"
+          - "What"
+          - "Where"
+          - "When"
+          - "Briefly"
+          - "About"
+          - "Skip"
+          - "This"
+          - "That"
+          - "These"
+          - "Those"
 
 httpApi:
   deployments:
@@ -142,3 +147,12 @@ httpApi:
           KnowledgeAccessAgent: {}
           IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
+          WebIngestorTaskAgent: {}
+
+mcp:
+  deployments:
+    local:
+      - domain: localhost:9007
+        agents:
+          KnowledgeAccessAgent: {}
+

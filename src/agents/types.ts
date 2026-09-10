@@ -1,4 +1,6 @@
-import { Schema, SchemaGetter } from "effect";
+import { Option, Schema, SchemaGetter } from "effect";
+
+const tryParseJson = Option.liftThrowable(JSON.parse);
 
 /**
  * Schema representing arbitrary JSON data lowered to a string for WIT compatibility.
@@ -8,11 +10,7 @@ export const JsonFromString = Schema.String.pipe(
   Schema.decodeTo(Schema.Unknown, {
     decode: SchemaGetter.transform((s) => {
       if (!s) return {};
-      try {
-        return JSON.parse(s);
-      } catch {
-        return s;
-      }
+      return tryParseJson(s).pipe(Option.getOrElse(() => s));
     }),
     encode: SchemaGetter.transform((u) => {
       if (u === undefined || u === null) return "{}";
@@ -67,6 +65,55 @@ export const S3TaskStatusResponseSchema = Schema.Struct({
 });
 export type S3TaskStatusResponse = typeof S3TaskStatusResponseSchema.Type;
 
+// --- Web Ingestion Task Agent Schemas ---
+
+export const WebTaskMetricsSchema = Schema.Struct({
+  totalDiscovered: Schema.Number,
+  totalSynced: Schema.Number,
+  totalFailed: Schema.Number,
+  lastDurationMs: Schema.Number,
+});
+export type WebTaskMetrics = typeof WebTaskMetricsSchema.Type;
+
+export const WebTaskStatusSchema = Schema.Literals([
+  "IDLE",
+  "SYNCING",
+  "COMPLETED",
+  "FAILED",
+]);
+export type WebTaskStatus = typeof WebTaskStatusSchema.Type;
+
+export const WebProcessedUrlEntrySchema = Schema.Struct({
+  url: Schema.String,
+  etag: Schema.optional(Schema.String),
+  lastModified: Schema.optional(Schema.String),
+  contentHash: Schema.optional(Schema.String),
+  syncedAt: Schema.optional(Schema.String),
+});
+export type WebProcessedUrlEntry = typeof WebProcessedUrlEntrySchema.Type;
+
+export const WebTaskStateSchema = Schema.Struct({
+  resourceName: Schema.String,
+  status: WebTaskStatusSchema,
+  lastSyncTimestamp: Schema.NullOr(Schema.String),
+  processedUrls: Schema.Record(Schema.String, WebProcessedUrlEntrySchema),
+  cursor: Schema.NullOr(Schema.String),
+  metrics: WebTaskMetricsSchema,
+  errorMessage: Schema.NullOr(Schema.String),
+});
+export type WebTaskState = typeof WebTaskStateSchema.Type;
+
+export const WebTaskStatusResponseSchema = Schema.Struct({
+  resourceName: Schema.String,
+  status: WebTaskStatusSchema,
+  lastSyncTimestamp: Schema.NullOr(Schema.String),
+  processedUrls: Schema.Array(WebProcessedUrlEntrySchema),
+  cursor: Schema.NullOr(Schema.String),
+  metrics: WebTaskMetricsSchema,
+  errorMessage: Schema.NullOr(Schema.String),
+});
+export type WebTaskStatusResponse = typeof WebTaskStatusResponseSchema.Type;
+
 // --- Ingestion Coordinator Agent Schemas ---
 
 export const ScheduleStatusSchema = Schema.Literals([
@@ -78,9 +125,9 @@ export type ScheduleStatus = typeof ScheduleStatusSchema.Type;
 
 export const SourceTypeSchema = Schema.Literals([
   "s3",
+  "web",
   // "postgres",
   // "confluence",
-  // "web",
   // "github",
   // "custom",
 ]);
@@ -217,6 +264,18 @@ export const DocumentResultSchema = Schema.Struct({
 });
 export type DocumentResult = typeof DocumentResultSchema.Type;
 
+export const DocumentSummarySchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  source: Schema.String,
+  resourceName: Schema.String,
+  sourceKey: Schema.String,
+  sizeBytes: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type DocumentSummary = typeof DocumentSummarySchema.Type;
+
 // --- Path Finding Schemas ---
 
 export const PathFindingQuerySchema = Schema.Struct({
@@ -306,21 +365,6 @@ export const WebhookIngestPayloadSchema = Schema.Struct({
   force: Schema.optional(Schema.Boolean),
 });
 export type WebhookIngestPayload = typeof WebhookIngestPayloadSchema.Type;
-
-export const BatchJobCallbackResultSchema = Schema.Struct({
-  jobId: Schema.String,
-  status: Schema.Literals(["COMPLETED", "FAILED"]),
-  processedItems: Schema.Number,
-  details: Schema.optional(Schema.String),
-});
-export type BatchJobCallbackResult = typeof BatchJobCallbackResultSchema.Type;
-
-export const OneShotWebhookHandleResponseSchema = Schema.Struct({
-  callbackUrl: Schema.String,
-  instructions: Schema.String,
-});
-export type OneShotWebhookHandleResponse =
-  typeof OneShotWebhookHandleResponseSchema.Type;
 
 // --- Helper Utilities ---
 

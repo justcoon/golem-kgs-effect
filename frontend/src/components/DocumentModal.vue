@@ -19,6 +19,25 @@ const renderedContent = computed(() => {
   return marked(props.document.content);
 });
 
+const webUrl = computed(() => {
+  if (!props.document) return null;
+  const candidate =
+    props.document.metadata?.url ||
+    props.document.metadata?.canonicalUrl ||
+    props.document.sourceKey;
+  if (
+    typeof candidate === 'string' &&
+    (candidate.startsWith('http://') || candidate.startsWith('https://'))
+  ) {
+    return candidate;
+  }
+  return null;
+});
+
+const isWebDocument = computed(() => {
+  return props.document?.source === 'web' || !!webUrl.value;
+});
+
 const formatDate = (dateStr?: string) => {
   if (!dateStr) return 'N/A';
   try {
@@ -48,6 +67,16 @@ const copyContent = async () => {
           <span class="doc-id">{{ document.id }}</span>
         </div>
         <div class="header-actions">
+          <a
+            v-if="webUrl"
+            :href="webUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="open-web-btn"
+            title="Open original webpage in a new tab"
+          >
+            🌐 Open Web Page ↗
+          </a>
           <button class="copy-btn" @click="copyContent">
             {{ copied ? '✓ Copied' : '📋 Copy Text' }}
           </button>
@@ -65,9 +94,36 @@ const copyContent = async () => {
             <span class="label">Resource</span>
             <span class="value">{{ document.resourceName || document.namespace || 'N/A' }}</span>
           </div>
-          <div v-if="document.sourceKey" class="meta-item">
-            <span class="label">File / Key</span>
-            <span class="value doc-key">{{ document.sourceKey }}</span>
+          <div v-if="document.sourceKey" class="meta-item" :class="{ 'meta-item-wide': !!webUrl }">
+            <span class="label">{{ isWebDocument ? 'Web URL' : 'File / Key' }}</span>
+            <a
+              v-if="webUrl"
+              :href="webUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="value doc-key web-link"
+              title="Open URL in new tab"
+            >
+              {{ document.sourceKey }}
+              <span class="link-arrow">↗</span>
+            </a>
+            <span v-else class="value doc-key">{{ document.sourceKey }}</span>
+          </div>
+          <div
+            v-if="document.metadata?.canonicalUrl && document.metadata.canonicalUrl !== document.sourceKey"
+            class="meta-item meta-item-wide"
+          >
+            <span class="label">Canonical URL</span>
+            <a
+              :href="document.metadata.canonicalUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="value doc-key web-link"
+              title="Open canonical URL in new tab"
+            >
+              {{ document.metadata.canonicalUrl }}
+              <span class="link-arrow">↗</span>
+            </a>
           </div>
           <div class="meta-item">
             <span class="label">Size</span>
@@ -142,6 +198,30 @@ const copyContent = async () => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.open-web-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(147, 51, 234, 0.3));
+  border: 1px solid rgba(147, 51, 234, 0.45);
+  color: #93c5fd;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.open-web-btn:hover {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.4), rgba(147, 51, 234, 0.5));
+  border-color: #60a5fa;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
 }
 
 .copy-btn {
@@ -222,6 +302,29 @@ const copyContent = async () => {
   font-family: monospace;
   font-size: 0.8rem;
   color: var(--primary, #a78bfa);
+}
+
+.web-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #60a5fa !important;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.web-link:hover {
+  color: #93c5fd !important;
+  text-decoration: underline;
+}
+
+.link-arrow {
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.meta-item-wide {
+  grid-column: span 2;
 }
 
 .tag-list {

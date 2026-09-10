@@ -1,6 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Pg } from "@golemcloud/effect-golem/postgres";
+import { Pg, parseJsonOr } from "./database-client.js";
 import { type CreateEdgeInput, type Edge } from "../domain/relationship.js";
 import {
   type GraphPath,
@@ -26,10 +26,7 @@ const mapEdgeRow = (row: EdgeRow): Edge => ({
   relationType: row.relation_type,
   weight: row.weight,
   confidence: row.confidence,
-  properties:
-    typeof row.properties === "string"
-      ? JSON.parse(row.properties)
-      : ((row.properties as Record<string, unknown>) ?? {}),
+  properties: parseJsonOr(row.properties, {}),
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
 });

@@ -1,6 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Pg } from "@golemcloud/effect-golem/postgres";
+import { Pg, parseJsonOr } from "./database-client.js";
 import {
   type CreateEntityInput,
   type Entity,
@@ -8,6 +8,29 @@ import {
   type EntityType,
   type UpdateEntityInput,
 } from "../domain/entity.js";
+import { type DocumentSummary } from "../domain/provenance.js";
+
+interface DocumentSummaryRow {
+  readonly id: string;
+  readonly title: string;
+  readonly source: string;
+  readonly resource_name: string;
+  readonly source_key: string;
+  readonly size_bytes: string | number;
+  readonly created_at: Date | string;
+  readonly updated_at: Date | string;
+}
+
+const mapDocumentSummaryRow = (row: DocumentSummaryRow): DocumentSummary => ({
+  id: row.id,
+  title: row.title,
+  source: row.source,
+  resourceName: row.resource_name,
+  sourceKey: row.source_key,
+  sizeBytes: Number(row.size_bytes),
+  createdAt: new Date(row.created_at),
+  updatedAt: new Date(row.updated_at),
+});
 
 interface EntityRow {
   readonly id: string;
@@ -33,14 +56,8 @@ const mapEntityRow = (row: EntityRow): Entity => ({
   name: row.name,
   entityType: row.entity_type as EntityType,
   description: row.description,
-  properties:
-    typeof row.properties === "string"
-      ? JSON.parse(row.properties)
-      : ((row.properties as Record<string, unknown>) ?? {}),
-  metadata:
-    typeof row.metadata === "string"
-      ? JSON.parse(row.metadata)
-      : ((row.metadata as Record<string, unknown>) ?? {}),
+  properties: parseJsonOr(row.properties, {}),
+  metadata: parseJsonOr(row.metadata, {}),
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
 });
@@ -75,6 +92,20 @@ EntityRepository.Default = Layer.effect(
 
         const row = rows[0];
         return row ? Option.some(mapEntityRow(row)) : Option.none();
+      });
+
+    const findByIds = (ids: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        if (ids.length === 0) {
+          return [] as ReadonlyArray<Entity>;
+        }
+        const rows = (yield* sql<EntityRow>`
+            SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
+            FROM entities
+            WHERE id = ANY(${Pg.array(ids)})
+          `) as ReadonlyArray<EntityRow>;
+
+        return rows.map(mapEntityRow);
       });
 
     const findByName = (name: string) =>
@@ -247,8 +278,58 @@ EntityRepository.Default = Layer.effect(
         return Number(rows[0]?.count ?? 0);
       });
 
+    const getRelatedDocuments = (entityId: string, limit = 50) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<DocumentSummaryRow>`
+            WITH doc_refs AS (
+                SELECT c.document_id AS ref
+                FROM entity_chunks ec
+                JOIN chunks c ON ec.chunk_id = c.id
+                WHERE ec.entity_id = ${entityId}
+
+                UNION
+
+                SELECT (e.properties->>'extractedFromDocument')::varchar AS ref
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND e.properties ? 'extractedFromDocument'
+
+                UNION
+
+                SELECT (e.properties->>'extracted_from_document')::varchar AS ref
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND e.properties ? 'extracted_from_document'
+
+                UNION
+
+                SELECT jsonb_array_elements_text(e.properties->'documents')::varchar AS ref
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND jsonb_typeof(e.properties->'documents') = 'array'
+            )
+            SELECT DISTINCT
+                d.id,
+                d.title,
+                d.source,
+                d.resource_name,
+                d.source_key,
+                d.size_bytes,
+                d.created_at,
+                d.updated_at
+            FROM documents d
+            WHERE d.id IN (SELECT ref FROM doc_refs)
+               OR d.source_key IN (SELECT ref FROM doc_refs)
+            ORDER BY d.updated_at DESC
+            LIMIT ${limit}
+          `) as ReadonlyArray<DocumentSummaryRow>;
+
+        return rows.map(mapDocumentSummaryRow);
+      });
+
     return {
       findById,
+      findByIds,
       findByName,
       findByAlias,
       upsertEntity,
@@ -259,6 +340,7 @@ EntityRepository.Default = Layer.effect(
       getTopConnected,
       deleteEntity,
       count,
+      getRelatedDocuments,
     };
   }),
 );
