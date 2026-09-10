@@ -11,6 +11,7 @@ import {
   NeighborhoodResponseSchema,
   PathFindingResultSchema,
   SearchResponseSchema,
+  SourceTypeSchema,
   type Citation,
   type DocumentResult,
   type EntityResult,
@@ -98,6 +99,8 @@ export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
   description:
     "Stateless ephemeral gateway for high-throughput concurrent search, graph traversal, GraphRAG, and question-answering",
+  promptHint:
+    "Query and explore the knowledge graph, retrieve documents, execute GraphRAG, and answer questions",
   mode: "ephemeral",
   config: AppAgentConfig,
   constructorParams: {},
@@ -112,6 +115,8 @@ export const KnowledgeAccessAgent = defineAgent({
         ),
       },
       success: SearchResponseSchema,
+      promptHint:
+        "Search ingested documents using hybrid, semantic vector, or keyword search",
       description:
         "Performs hybrid, vector, or keyword search across ingested document chunks",
       http: [Http.post("/search")],
@@ -122,6 +127,7 @@ export const KnowledgeAccessAgent = defineAgent({
         limit: Schema.optional(Schema.Number),
       },
       success: EntitySearchResponseSchema,
+      promptHint: "Search knowledge graph entities by name, alias, or keyword",
       description:
         "Searches entities by name, alias, or keyword. Returns top connected hubs if query is omitted or empty.",
       http: [Http.post("/entities/search")],
@@ -131,6 +137,8 @@ export const KnowledgeAccessAgent = defineAgent({
         limit: Schema.optional(Schema.Number),
       },
       success: EntitySearchResponseSchema,
+      promptHint:
+        "List top connected hub entities in the knowledge graph sorted by connectivity degree",
       description:
         "Returns top connected entities (graph hubs) sorted by degree",
       http: [Http.post("/entities/top")],
@@ -143,6 +151,8 @@ export const KnowledgeAccessAgent = defineAgent({
         minConfidence: Schema.optional(Schema.Number),
       },
       success: NeighborhoodResponseSchema,
+      promptHint:
+        "Traverse and explore relationships and neighboring entities around an entity",
       description:
         "Traverses graph neighborhood up to maxDepth hops around target entity",
       http: [Http.post("/neighborhood")],
@@ -152,6 +162,7 @@ export const KnowledgeAccessAgent = defineAgent({
         id: Schema.String,
       },
       success: Schema.NullOr(EntityResultSchema),
+      promptHint: "Look up an entity by its exact ID",
       description: "Finds an entity by exact ID",
       http: [Http.get("/entities/{id}")],
     }),
@@ -160,6 +171,7 @@ export const KnowledgeAccessAgent = defineAgent({
         id: Schema.String,
       },
       success: Schema.Array(DocumentSummarySchema),
+      promptHint: "Get documents associated with or mentioning an entity",
       description:
         "Retrieves summary list of all documents associated with an entity",
       http: [Http.get("/entities/{id}/documents")],
@@ -169,6 +181,7 @@ export const KnowledgeAccessAgent = defineAgent({
         id: Schema.String,
       },
       success: Schema.NullOr(DocumentResultSchema),
+      promptHint: "Retrieve raw content and metadata for a document by its ID",
       description: "Retrieves raw document content and metadata by ID",
       http: [Http.get("/documents/{id}")],
     }),
@@ -181,6 +194,8 @@ export const KnowledgeAccessAgent = defineAgent({
         relationTypes: Schema.optional(Schema.Array(Schema.String)),
       },
       success: GraphRAGContextBundleSchema,
+      promptHint:
+        "Execute GraphRAG retrieval returning structured context and synthesized prompt",
       description:
         "Executes GraphRAG retrieval pipeline returning structured context and formatted prompt",
       http: [Http.post("/graphrag")],
@@ -196,6 +211,8 @@ export const KnowledgeAccessAgent = defineAgent({
         ),
       },
       success: PathFindingResultSchema,
+      promptHint:
+        "Find relationship paths connecting two entities in the graph",
       description:
         "Discovers multi-hop relational paths between source and target entities",
       http: [Http.post("/paths")],
@@ -208,6 +225,8 @@ export const KnowledgeAccessAgent = defineAgent({
         generateAnswer: Schema.optional(Schema.Boolean),
       },
       success: AnswerResponseSchema,
+      promptHint:
+        "Ask a natural language question to get a synthesized answer with source citations",
       description:
         "Answers natural language questions with GraphRAG context retrieval, synthesis, and source citations",
       http: [Http.post("/ask")],
@@ -215,6 +234,8 @@ export const KnowledgeAccessAgent = defineAgent({
     getOverview: method({
       params: {},
       success: KnowledgeBaseOverviewSchema,
+      promptHint:
+        "Retrieve knowledge base overview statistics including counts of documents, chunks, entities, and relations",
       description:
         "Returns statistical overview of the knowledge base (document count, chunk count, entity count, relationship count)",
       http: [Http.get("/overview")],
@@ -548,7 +569,7 @@ export const KnowledgeAccessAgent = defineAgent({
             d.toISOString(),
           ).pipe(Option.getOrNull);
 
-          const supportedSources = ["s3"];
+          const supportedSources = [...SourceTypeSchema.literals];
 
           return {
             totalDocuments,

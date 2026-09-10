@@ -66,6 +66,26 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         "Counter must not be deployed",
       );
     });
+
+    it("should correctly configure mcp.deployments.local with domain localhost:9007 and KnowledgeAccessAgent", () => {
+      const manifestPath = path.resolve(process.cwd(), "golem.yaml");
+      const manifestContent = fs.readFileSync(manifestPath, "utf-8");
+
+      assert.ok(
+        manifestContent.includes("mcp:"),
+        "mcp section must be defined in golem.yaml",
+      );
+      assert.ok(
+        manifestContent.includes("domain: localhost:9007") ||
+          manifestContent.includes("localhost:9007"),
+        "mcp local domain must be configured on port 9007",
+      );
+      const mcpSection = manifestContent.split("mcp:")[1] ?? "";
+      assert.ok(
+        mcpSection.includes("KnowledgeAccessAgent:"),
+        "KnowledgeAccessAgent must be configured under mcp deployments",
+      );
+    });
   });
 
   describe("Webhook Schemas & Contracts", () => {

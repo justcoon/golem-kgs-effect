@@ -14,10 +14,12 @@ flowchart TD
         PG[("PostgreSQL + pgvector<br/>(Metadata, Vectors, Graph)")]
         LLM["Ollama / Embedding APIs<br/>(nomic-embed-text)"]
         Client["Frontend & Client Apps<br/>(Vue 3 / REST)"]
+        MCPClient["AI & MCP Clients<br/>(Claude Desktop / Cursor / Inspector)"]
     end
 
     subgraph Golem["Golem Cloud Runtime (WASM Component)"]
         GW["Golem HTTP Gateway<br/>(Domain & Route Mounts on :9006)"]
+        MCPGW["Golem MCP Gateway<br/>(Streamable HTTP on :9007)"]
 
         subgraph Agents["Agents"]
             Coord["IngestionCoordinatorAgent<br/>(Durable Singleton Orchestrator)"]
@@ -28,6 +30,8 @@ flowchart TD
     end
 
     Client -->|HTTP REST| GW
+    MCPClient -->|Streamable HTTP /mcp| MCPGW
+    MCPGW --> Access
     GW --> Access
     GW --> Coord
     GW --> S3Worker
@@ -203,8 +207,9 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 - **`POST /api/knowledge/entities/top`**: Retrieves top connected entities (graph hubs) sorted by degree (relationship count) and freshness.
 - **`POST /api/knowledge/neighborhood`**: Multi-hop topological graph traversal around seed entities. Supports human entity names (e.g. `"PostgreSQL"`), aliases (e.g. `"postgres"`), or IDs with transparent resolution, returning complete entity records without data redundancy.
 - **`POST /api/knowledge/paths`**: Relational shortest-path search between two entities. Supports natural entity names or IDs with transparent resolution and returns populated entity lookup pools.
-- **`GET /api/knowledge/overview`**: Summary counts (documents, chunks, entities, relationships, last sync).
+- **`GET /api/knowledge/overview`**: Summary counts (documents, chunks, entities, relationships, supported sources `["s3", "web"]`, last sync timestamp).
 - **`GET /api/knowledge/entities/{id}`**: Entity metadata, attributes, and known aliases.
+- **`GET /api/knowledge/entities/{id}/documents`**: Summary list of all documents referencing or associated with an entity.
 - **`GET /api/knowledge/documents/{id}`**: Raw document content, title, and metadata.
 
 ---
@@ -213,8 +218,9 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 
 | Agent           | Method | Route                                                  | Description                                                    |
 | :-------------- | :----- | :----------------------------------------------------- | :------------------------------------------------------------- |
-| **Knowledge**   | `GET`  | `/api/knowledge/overview`                              | Knowledge base statistics                                      |
+| **Knowledge**   | `GET`  | `/api/knowledge/overview`                              | Knowledge base statistics & supported sources                  |
 | **Knowledge**   | `GET`  | `/api/knowledge/entities/{id}`                         | Entity lookup by ID                                            |
+| **Knowledge**   | `GET`  | `/api/knowledge/entities/{id}/documents`               | Document summaries associated with an entity                   |
 | **Knowledge**   | `GET`  | `/api/knowledge/documents/{id}`                        | Document lookup by ID                                          |
 | **Knowledge**   | `POST` | `/api/knowledge/entities/search`                       | Entity autocomplete / search by prefix, name, or alias         |
 | **Knowledge**   | `POST` | `/api/knowledge/entities/top`                          | Top connected entities (graph hubs) sorted by degree           |
@@ -235,6 +241,59 @@ High-throughput query and retrieval interface exposing GraphRAG search, entity r
 | **Ingestor (Web)**| `GET`  | `/api/ingestion/web/{resourceName}/status`             | Web Ingestor status and checkpoint                             |
 | **Ingestor (Web)**| `POST` | `/api/ingestion/web/{resourceName}/sync`               | Trigger Web resource sync                                      |
 | **Ingestor (Web)**| `POST` | `/api/ingestion/web/{resourceName}/reset`              | Reset cursor for full rescan                                   |
+
+---
+
+## Model Context Protocol (MCP) Server
+
+`KnowledgeAccessAgent` is natively exposed as a **Model Context Protocol (MCP) server** with Golem's Streamable HTTP transport on port **`9007`**. Any MCP-compliant client (Claude Desktop, Cursor, MCP Inspector, custom agents) can connect directly to:
+
+```
+http://localhost:9007/mcp
+```
+
+### Exposed MCP Tools & Resources
+
+All methods on `KnowledgeAccessAgent` are automatically registered as MCP entities with descriptive prompts and discovery hints:
+
+| MCP Entity | Type | MCP Identifier | Description |
+| :--- | :--- | :--- | :--- |
+| `search` | **Tool** | `KnowledgeAccessAgent-search` | Search ingested documents using hybrid, semantic vector, or keyword search |
+| `searchEntities` | **Tool** | `KnowledgeAccessAgent-searchEntities` | Search knowledge graph entities by name, alias, or keyword |
+| `getTopEntities` | **Tool** | `KnowledgeAccessAgent-getTopEntities` | List top connected hub entities in the knowledge graph sorted by connectivity degree |
+| `getNeighborhood` | **Tool** | `KnowledgeAccessAgent-getNeighborhood` | Traverse and explore relationships and neighboring entities around an entity |
+| `getEntity` | **Tool** | `KnowledgeAccessAgent-getEntity` | Look up an entity's details and properties by its exact ID |
+| `getEntityDocuments` | **Tool** | `KnowledgeAccessAgent-getEntityDocuments` | Retrieve summary list of all documents associated with an entity |
+| `getDocument` | **Tool** | `KnowledgeAccessAgent-getDocument` | Retrieve raw document content and metadata by ID |
+| `graphRag` | **Tool** | `KnowledgeAccessAgent-graphRag` | Execute GraphRAG retrieval returning structured context and synthesized prompt |
+| `findPaths` | **Tool** | `KnowledgeAccessAgent-findPaths` | Find multi-hop relational paths connecting two entities in the graph |
+| `ask` | **Tool** | `KnowledgeAccessAgent-ask` | Ask a natural language question to get a synthesized answer with source citations |
+| `getOverview` | **Resource** | `KnowledgeAccessAgent-getOverview` | Read knowledge base statistics (document, chunk, entity, edge counts, and supported sources) |
+
+### Client Configuration
+
+#### Claude Desktop (`claude_desktop_config.json`)
+
+Configure Claude Desktop to access your Golem Knowledge Graph:
+
+```json
+{
+  "mcpServers": {
+    "golem-kgs": {
+      "url": "http://localhost:9007/mcp"
+    }
+  }
+}
+```
+
+#### MCP Inspector (Interactive Testing)
+
+Test tools, inspect schema definitions, and execute invocations in the browser:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+Connect using transport **Streamable HTTP** with URL `http://localhost:9007/mcp`.
 
 ---
 
@@ -403,7 +462,22 @@ httpApi:
 
 Routes all agent APIs through a unified HTTP reverse proxy on `http://localhost:9006`.
 
-### 6. Environment Variables Reference
+### 6. Model Context Protocol (MCP) Server Deployment
+
+Configured under `mcp.deployments.local`:
+
+```yaml
+mcp:
+  deployments:
+    local:
+      - domain: localhost:9007
+        agents:
+          KnowledgeAccessAgent: {}
+```
+
+Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HTTP transport on port `9007` (`http://localhost:9007/mcp`).
+
+### 7. Environment Variables Reference
 
 | Variable                | Description                          | Default / Local Example     |
 | :---------------------- | :----------------------------------- | :-------------------------- |
@@ -472,7 +546,7 @@ set -a && source .env && set +a
 golem deploy --redeploy-agents --yes
 ```
 
-The Golem HTTP Gateway will be active on **`http://localhost:9006`**.
+The Golem HTTP Gateway will be active on **`http://localhost:9006`**, and the Golem MCP Gateway will be active on **`http://localhost:9007/mcp`**.
 
 ### 4. Start Frontend
 
@@ -604,3 +678,22 @@ curl -s --url 'http://localhost:9006/api/knowledge/graphrag' \
     "maxHops": 2
   }'
 ```
+
+### Entity Related Documents
+
+```bash
+# Retrieve summary list of all documents linked to an entity
+curl -s http://localhost:9006/api/knowledge/entities/golem-cloud/documents
+```
+
+### Test MCP Server with MCP Inspector
+
+```bash
+# Launch MCP Inspector in browser
+npx @modelcontextprotocol/inspector
+```
+
+In the MCP Inspector UI, connect with:
+- **Transport**: `Streamable HTTP`
+- **URL**: `http://localhost:9007/mcp`
+
