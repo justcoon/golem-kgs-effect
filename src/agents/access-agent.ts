@@ -19,6 +19,7 @@ import {
 } from "./types.js";
 import { type Entity } from "../domain/entity.js";
 import { type RawDocument } from "../domain/provenance.js";
+import { type GraphRAGContextBundle } from "../domain/query.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import {
   CheckpointRepository,
@@ -94,6 +95,93 @@ const fetchEntitiesByIds = (
   entityRepo
     .findByIds(ids)
     .pipe(Effect.map((entities) => entities.map(mapEntityToResult)));
+
+function cleanTextParagraph(text: string): string {
+  return text
+    .replace(/^(#+\s*)+/g, "")
+    .replace(/^[-*•]\s+/g, "")
+    .trim();
+}
+
+function synthesizeAnswerText(
+  query: string,
+  bundle: GraphRAGContextBundle,
+): string {
+  if (bundle.relevantChunks.length === 0 && bundle.entities.length === 0) {
+    return `No matching knowledge graph entities or documents found for query "${query}".`;
+  }
+
+  const usefulParagraphs: string[] = [];
+  const seenContent = new Set<string>();
+
+  for (const chunk of bundle.relevantChunks) {
+    const rawLines = chunk.content.split(/\n+/);
+    const cleanedParagraphs: string[] = [];
+    let currentBlock: string[] = [];
+
+    for (const rawLine of rawLines) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (currentBlock.length > 0) {
+          cleanedParagraphs.push(currentBlock.join(" "));
+          currentBlock = [];
+        }
+        continue;
+      }
+
+      // Skip isolated short header lines or navigation tokens without punctuation
+      if (line.length < 25 && !/[.?!:;]$/.test(line) && !line.includes(" "))
+        continue;
+
+      currentBlock.push(line);
+    }
+    if (currentBlock.length > 0) {
+      cleanedParagraphs.push(currentBlock.join(" "));
+    }
+
+    for (const para of cleanedParagraphs) {
+      const cleaned = cleanTextParagraph(para);
+      if (cleaned.length < 35) continue;
+      const signature = cleaned.toLowerCase().slice(0, 100);
+      if (!seenContent.has(signature)) {
+        seenContent.add(signature);
+        usefulParagraphs.push(cleaned);
+      }
+      if (usefulParagraphs.length >= 3) break;
+    }
+    if (usefulParagraphs.length >= 3) break;
+  }
+
+  const sections: string[] = [];
+
+  if (usefulParagraphs.length > 0) {
+    sections.push(usefulParagraphs.join("\n\n"));
+  } else if (bundle.relevantChunks[0]?.content) {
+    sections.push(bundle.relevantChunks[0].content.trim());
+  }
+
+  // Include grounded relationship insights if available
+  if (bundle.relationships.length > 0) {
+    const entityMap = new Map<string, string>();
+    for (const e of bundle.entities) {
+      entityMap.set(e.id, e.name);
+    }
+    const relLines = bundle.relationships.slice(0, 4).map((rel) => {
+      const src = entityMap.get(rel.sourceId) ?? rel.sourceId;
+      const tgt = entityMap.get(rel.targetId) ?? rel.targetId;
+      const relVerb = rel.relationType.toLowerCase().replace(/_/g, " ");
+      return `- **${src}** ${relVerb} **${tgt}**`;
+    });
+    if (relLines.length > 0) {
+      sections.push(`**Key Graph Insights:**\n${relLines.join("\n")}`);
+    }
+  }
+
+  return (
+    sections.join("\n\n") ||
+    `Retrieved ${bundle.entities.length} related entities and ${bundle.relevantChunks.length} documents matching "${query}".`
+  );
+}
 
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
@@ -506,24 +594,7 @@ export const KnowledgeAccessAgent = defineAgent({
 
           let answer = "";
           if (generateAnswer) {
-            if (
-              bundle.relevantChunks.length > 0 ||
-              bundle.entities.length > 0
-            ) {
-              const entityList = bundle.entities
-                .slice(0, 5)
-                .map((e) => `${e.name} (${e.entityType})`)
-                .join(", ");
-              const entityPart = entityList
-                ? ` Key entities: ${entityList}.`
-                : "";
-              const chunkPart = bundle.relevantChunks[0]
-                ? ` Excerpt: "${bundle.relevantChunks[0].content.trim().slice(0, 200)}..."`
-                : "";
-              answer = `Grounded response for "${query}":${entityPart}${chunkPart}`;
-            } else {
-              answer = `No matching knowledge graph entities or documents found for query "${query}".`;
-            }
+            answer = synthesizeAnswerText(query, bundle);
           }
 
           const topScore = bundle.relevantChunks[0]?.score ?? 0.5;

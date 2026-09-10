@@ -122,7 +122,7 @@ export function extractTextFromHtml(body: string): string {
   );
   text = text.replace(/<!--[\s\S]*?-->/g, " ");
 
-  // Strip non-content chrome
+  // Strip non-content chrome elements (headers, footers, navs, asides, buttons, forms, svgs)
   text = text.replace(
     /<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi,
     " ",
@@ -133,6 +133,16 @@ export function extractTextFromHtml(body: string): string {
   );
   text = text.replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, " ");
   text = text.replace(/<aside\b[^<]*(?:(?!<\/aside>)<[^<]*)*<\/aside>/gi, " ");
+  text = text.replace(
+    /<button\b[^<]*(?:(?!<\/button>)<[^<]*)*<\/button>/gi,
+    " ",
+  );
+  text = text.replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, " ");
+  text = text.replace(/<form\b[^<]*(?:(?!<\/form>)<[^<]*)*<\/form>/gi, " ");
+  text = text.replace(
+    /<[^>]+\b(role=["'](?:navigation|banner|contentinfo|search|menu)["']|aria-hidden=["']true["'])[^>]*>.*?<\/[^>]+>/gi,
+    " ",
+  );
 
   // Structural conversions to newlines
   text = text.replace(/<\/(p|div|section|article|blockquote)>/gi, "\n\n");

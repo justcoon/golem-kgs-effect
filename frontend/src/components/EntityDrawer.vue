@@ -27,7 +27,7 @@ const extractedFromDoc = computed<string | null>(() => {
 
 const relatedDocs = ref<DocumentSummary[]>([]);
 const loadingDocs = ref(false);
-const docsExpanded = ref(true);
+const docsExpanded = ref(false);
 
 watch(
   () => [props.isOpen, props.entity?.id],

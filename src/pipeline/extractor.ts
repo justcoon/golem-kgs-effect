@@ -194,13 +194,21 @@ export class EntityExtractor {
     // 3. Multi-word Title Case Entities
     const stopwordsList = rules?.stopwords ?? [];
     const stopwords = new Set(stopwordsList.map((s) => s.toLowerCase()));
-    const properNounRegex = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b/g;
+    const properNounRegex = /\b([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){1,3})\b/g;
     while ((match = properNounRegex.exec(text)) !== null) {
       const phrase = match[1]?.trim();
       if (phrase && !stopwords.has(phrase.toLowerCase())) {
         const cleanPhrase = phrase.replace(/^(the|a|an)\s+/i, "").trim();
-        if (cleanPhrase && !stopwords.has(cleanPhrase.toLowerCase())) {
-          addEntity(cleanPhrase, "CONCEPT", 0.75);
+        if (
+          cleanPhrase &&
+          cleanPhrase.includes(" ") &&
+          !stopwords.has(cleanPhrase.toLowerCase())
+        ) {
+          const words = cleanPhrase.toLowerCase().split(/[ \t]+/);
+          const hasStopword = words.some((w) => stopwords.has(w));
+          if (!hasStopword) {
+            addEntity(cleanPhrase, "CONCEPT", 0.75);
+          }
         }
       }
     }

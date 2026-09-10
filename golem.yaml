@@ -148,6 +148,18 @@ components:
           - "The Following"
           - "For Example"
           - "In Addition"
+          - "Why"
+          - "How"
+          - "What"
+          - "Where"
+          - "When"
+          - "Briefly"
+          - "About"
+          - "Skip"
+          - "This"
+          - "That"
+          - "These"
+          - "Those"
 
 httpApi:
   deployments:
