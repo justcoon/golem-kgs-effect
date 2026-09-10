@@ -1,7 +1,10 @@
 import { Context, type Effect, type Layer, type Option } from "effect";
 import { type SqlClient } from "effect/unstable/sql";
 import { type SqlError } from "effect/unstable/sql/SqlError";
-import { type RawDocument } from "../domain/provenance.js";
+import {
+  type RawDocument,
+  type DocumentSummary,
+} from "../domain/provenance.js";
 import {
   type CreateChunkInput,
   type DocumentChunk,
@@ -174,6 +177,10 @@ export interface EntityRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<Entity>, SqlError>;
   readonly deleteEntity: (id: string) => Effect.Effect<boolean, SqlError>;
   readonly count: () => Effect.Effect<number, SqlError>;
+  readonly getRelatedDocuments: (
+    entityId: string,
+    limit?: number,
+  ) => Effect.Effect<ReadonlyArray<DocumentSummary>, SqlError>;
 }
 
 export class EntityRepository extends Context.Service<

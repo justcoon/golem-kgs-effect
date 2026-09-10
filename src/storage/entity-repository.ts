@@ -8,6 +8,29 @@ import {
   type EntityType,
   type UpdateEntityInput,
 } from "../domain/entity.js";
+import { type DocumentSummary } from "../domain/provenance.js";
+
+interface DocumentSummaryRow {
+  readonly id: string;
+  readonly title: string;
+  readonly source: string;
+  readonly resource_name: string;
+  readonly source_key: string;
+  readonly size_bytes: string | number;
+  readonly created_at: Date | string;
+  readonly updated_at: Date | string;
+}
+
+const mapDocumentSummaryRow = (row: DocumentSummaryRow): DocumentSummary => ({
+  id: row.id,
+  title: row.title,
+  source: row.source,
+  resourceName: row.resource_name,
+  sourceKey: row.source_key,
+  sizeBytes: Number(row.size_bytes),
+  createdAt: new Date(row.created_at),
+  updatedAt: new Date(row.updated_at),
+});
 
 interface EntityRow {
   readonly id: string;
@@ -247,6 +270,46 @@ EntityRepository.Default = Layer.effect(
         return Number(rows[0]?.count ?? 0);
       });
 
+    const getRelatedDocuments = (entityId: string, limit = 50) =>
+      Effect.gen(function* () {
+        const rows = (yield* sql<DocumentSummaryRow>`
+            SELECT DISTINCT
+                d.id,
+                d.title,
+                d.source,
+                d.resource_name,
+                d.source_key,
+                d.size_bytes,
+                d.created_at,
+                d.updated_at
+            FROM documents d
+            WHERE d.id IN (
+                SELECT c.document_id
+                FROM entity_chunks ec
+                JOIN chunks c ON ec.chunk_id = c.id
+                WHERE ec.entity_id = ${entityId}
+
+                UNION
+
+                SELECT (e.properties->>'extractedFromDocument')::varchar
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND e.properties ? 'extractedFromDocument'
+
+                UNION
+
+                SELECT jsonb_array_elements_text(e.properties->'documents')::varchar
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND jsonb_typeof(e.properties->'documents') = 'array'
+            )
+            ORDER BY d.updated_at DESC
+            LIMIT ${limit}
+          `) as ReadonlyArray<DocumentSummaryRow>;
+
+        return rows.map(mapDocumentSummaryRow);
+      });
+
     return {
       findById,
       findByName,
@@ -259,6 +322,7 @@ EntityRepository.Default = Layer.effect(
       getTopConnected,
       deleteEntity,
       count,
+      getRelatedDocuments,
     };
   }),
 );

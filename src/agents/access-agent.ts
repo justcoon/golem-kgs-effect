@@ -3,6 +3,7 @@ import { defineAgent, Http, method } from "@golemcloud/effect-golem";
 import {
   AnswerResponseSchema,
   DocumentResultSchema,
+  DocumentSummarySchema,
   EntityResultSchema,
   EntitySearchResponseSchema,
   GraphRAGContextBundleSchema,
@@ -139,6 +140,15 @@ export const KnowledgeAccessAgent = defineAgent({
       success: Schema.NullOr(EntityResultSchema),
       description: "Finds an entity by exact ID",
       http: [Http.get("/entities/{id}")],
+    }),
+    getEntityDocuments: method({
+      params: {
+        id: Schema.String,
+      },
+      success: Schema.Array(DocumentSummarySchema),
+      description:
+        "Retrieves summary list of all documents associated with an entity",
+      http: [Http.get("/entities/{id}/documents")],
     }),
     getDocument: method({
       params: {
@@ -317,6 +327,22 @@ export const KnowledgeAccessAgent = defineAgent({
             properties: entity.properties,
             metadata: entity.metadata,
           };
+        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+      getEntityDocuments: ({ id }) =>
+        Effect.gen(function* () {
+          const entityRepo = yield* EntityRepository;
+          const docs = yield* entityRepo.getRelatedDocuments(id);
+          return docs.map((doc) => ({
+            id: doc.id,
+            title: doc.title,
+            source: doc.source,
+            resourceName: doc.resourceName,
+            sourceKey: doc.sourceKey,
+            sizeBytes: doc.sizeBytes,
+            createdAt: new Date(doc.createdAt).toISOString(),
+            updatedAt: new Date(doc.updatedAt).toISOString(),
+          }));
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
       getDocument: ({ id }) =>

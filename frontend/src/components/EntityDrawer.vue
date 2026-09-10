@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import type { EntityResult } from '../types/api';
+import { computed, ref, watch } from 'vue';
+import type { EntityResult, DocumentSummary } from '../types/api';
+import { ApiService } from '../services/api';
 
 const props = defineProps<{
   entity: EntityResult | null;
@@ -24,9 +25,80 @@ const extractedFromDoc = computed<string | null>(() => {
   return typeof doc === 'string' && doc.trim().length > 0 ? doc.trim() : null;
 });
 
+const relatedDocs = ref<DocumentSummary[]>([]);
+const loadingDocs = ref(false);
+
+watch(
+  () => [props.isOpen, props.entity?.id],
+  async ([isOpen, entityId]) => {
+    if (!isOpen || !entityId) {
+      relatedDocs.value = [];
+      return;
+    }
+
+    // Immediate fallback from properties if present
+    const propsDocs = props.entity?.properties?.documents;
+    const initialFallback: DocumentSummary[] = [];
+
+    if (Array.isArray(propsDocs)) {
+      for (const d of propsDocs) {
+        if (typeof d === 'string' && d.trim().length > 0) {
+          const trimmed = d.trim();
+          initialFallback.push({
+            id: trimmed,
+            title: trimmed,
+            source: trimmed.startsWith('http') ? 'web' : 'document',
+            resourceName: 'default',
+            sourceKey: trimmed,
+            sizeBytes: 0,
+            createdAt: '',
+            updatedAt: '',
+          });
+        }
+      }
+    } else if (extractedFromDoc.value) {
+      initialFallback.push({
+        id: extractedFromDoc.value,
+        title: extractedFromDoc.value,
+        source: extractedFromDoc.value.startsWith('http') ? 'web' : 'document',
+        resourceName: 'default',
+        sourceKey: extractedFromDoc.value,
+        sizeBytes: 0,
+        createdAt: '',
+        updatedAt: '',
+      });
+    }
+
+    relatedDocs.value = initialFallback;
+    loadingDocs.value = true;
+
+    try {
+      const fetched = await ApiService.getEntityDocuments(String(entityId));
+      if (fetched && fetched.length > 0) {
+        relatedDocs.value = fetched;
+      }
+    } catch {
+      // Retain fallback list
+    } finally {
+      loadingDocs.value = false;
+    }
+  },
+  { immediate: true }
+);
+
 function isDocKey(key: string | number): boolean {
   const k = String(key);
-  return k === 'extractedFromDocument' || k === 'extracted_from_document';
+  return (
+    k === 'extractedFromDocument' ||
+    k === 'extracted_from_document' ||
+    k === 'documents'
+  );
+}
+
+function isWebUrl(sourceKey?: string, source?: string): boolean {
+  if (source === 'web') return true;
+  if (!sourceKey) return false;
+  return sourceKey.startsWith('http://') || sourceKey.startsWith('https://');
 }
 
 function navigateToDoc(docId?: string | null) {
@@ -57,20 +129,57 @@ function navigateToDoc(docId?: string | null) {
           </button>
         </div>
 
-        <div v-if="extractedFromDoc" class="drawer-section source-doc-section">
-          <label class="section-label">Source Document</label>
-          <div class="source-doc-card" @click="navigateToDoc(extractedFromDoc)">
-            <div class="source-doc-icon-wrap">
-              <span class="source-doc-icon">📄</span>
+        <div
+          v-if="loadingDocs || relatedDocs.length > 0 || extractedFromDoc"
+          class="drawer-section related-docs-section"
+        >
+          <div class="section-header-row">
+            <label class="section-label">Related Documents</label>
+            <span v-if="relatedDocs.length > 0" class="badge-count">{{ relatedDocs.length }}</span>
+            <span v-if="loadingDocs" class="loading-spinner-tiny" title="Loading related documents...">⏳</span>
+          </div>
+
+          <div class="related-docs-list">
+            <div
+              v-for="doc in relatedDocs"
+              :key="doc.id"
+              class="related-doc-card"
+            >
+              <div class="doc-card-main" @click="navigateToDoc(doc.id)">
+                <div class="doc-icon-wrap" :class="doc.source">
+                  <span class="doc-icon">{{ doc.source === 'web' ? '🌐' : '📄' }}</span>
+                </div>
+                <div class="doc-content">
+                  <div class="doc-title-row">
+                    <span class="doc-title-text" :title="doc.title || doc.id">{{ doc.title || doc.id }}</span>
+                    <span v-if="doc.id === extractedFromDoc" class="origin-tag" title="First extracted from this document">Origin</span>
+                    <span class="source-tag" :class="doc.source">{{ doc.source.toUpperCase() }}</span>
+                  </div>
+                  <div class="doc-sub-key" :title="doc.sourceKey || doc.id">{{ doc.sourceKey || doc.id }}</div>
+                </div>
+              </div>
+
+              <div class="doc-actions-row">
+                <button
+                  class="doc-action-btn view-btn"
+                  @click="navigateToDoc(doc.id)"
+                  title="Open document preview modal"
+                >
+                  <span>👁️ Preview</span>
+                </button>
+                <a
+                  v-if="isWebUrl(doc.sourceKey, doc.source)"
+                  :href="doc.sourceKey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="doc-action-btn web-btn"
+                  title="Open live webpage in new tab"
+                >
+                  <span>🌐 Visit Page</span>
+                  <span class="btn-arrow">↗</span>
+                </a>
+              </div>
             </div>
-            <div class="source-doc-content">
-              <div class="source-doc-tag">Extracted From Document</div>
-              <div class="source-doc-id" :title="extractedFromDoc">{{ extractedFromDoc }}</div>
-            </div>
-            <button class="source-doc-link-btn" title="Open Document">
-              <span>View</span>
-              <span class="btn-arrow">↗</span>
-            </button>
           </div>
         </div>
 
@@ -256,56 +365,86 @@ function navigateToDoc(docId?: string | null) {
   box-shadow: 0 4px 14px rgba(56, 189, 248, 0.25);
 }
 
-.source-doc-section {
-  margin-top: -4px;
+.related-docs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.source-doc-card {
+.section-header-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: linear-gradient(135deg, rgba(30, 41, 59, 0.75), rgba(15, 23, 42, 0.85));
-  border: 1px solid rgba(56, 189, 248, 0.28);
+  gap: 8px;
+}
+
+.badge-count {
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: rgba(56, 189, 248, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  padding: 1px 7px;
   border-radius: 10px;
-  padding: 12px 14px;
-  cursor: pointer;
+}
+
+.loading-spinner-tiny {
+  font-size: 0.85rem;
+  animation: pulse 1.5s infinite;
+}
+
+.related-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.related-doc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.75), rgba(15, 23, 42, 0.85));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 10px;
+  padding: 10px 12px;
   position: relative;
   overflow: hidden;
-  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s, background 0.2s;
+  transition: border-color 0.2s, background 0.2s;
 }
 
-.source-doc-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 3px;
-  height: 100%;
-  background: linear-gradient(180deg, #38bdf8, #818cf8);
-  border-radius: 2px;
-}
-
-.source-doc-card:hover {
-  border-color: rgba(56, 189, 248, 0.55);
+.related-doc-card:hover {
+  border-color: rgba(56, 189, 248, 0.45);
   background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.95));
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(56, 189, 248, 0.2);
 }
 
-.source-doc-icon-wrap {
-  width: 36px;
-  height: 36px;
+.doc-card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.doc-icon-wrap {
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
   background: rgba(56, 189, 248, 0.14);
   border: 1px solid rgba(56, 189, 248, 0.25);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: 1rem;
   flex-shrink: 0;
 }
 
-.source-doc-content {
+.doc-icon-wrap.web {
+  background: rgba(147, 51, 234, 0.15);
+  border-color: rgba(147, 51, 234, 0.35);
+}
+
+.doc-content {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -313,50 +452,108 @@ function navigateToDoc(docId?: string | null) {
   gap: 2px;
 }
 
-.source-doc-tag {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: #38bdf8;
-  letter-spacing: 0.05em;
+.doc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.source-doc-id {
-  font-family: 'JetBrains Mono', monospace, sans-serif;
+.doc-title-text {
   font-size: 0.85rem;
   font-weight: 600;
   color: #f1f5f9;
-  word-break: break-all;
-  overflow-wrap: anywhere;
-  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
 }
 
-.source-doc-link-btn {
+.origin-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(234, 179, 8, 0.18);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  color: #facc15;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.source-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
   background: rgba(56, 189, 248, 0.12);
   border: 1px solid rgba(56, 189, 248, 0.25);
-  color: #7dd3fc;
-  font-size: 0.78rem;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 6px;
+  color: #38bdf8;
+  letter-spacing: 0.04em;
+}
+
+.source-tag.web {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.35);
+  color: #c084fc;
+}
+
+.doc-sub-key {
+  font-family: 'JetBrains Mono', monospace, sans-serif;
+  font-size: 0.72rem;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-actions-row {
   display: flex;
   align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.doc-action-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
-  transition: all 0.2s;
-  flex-shrink: 0;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.15s ease;
 }
 
-.source-doc-card:hover .source-doc-link-btn {
-  background: #38bdf8;
-  color: #0f172a;
-  border-color: #38bdf8;
+.doc-action-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
-.source-doc-link-btn .btn-arrow {
-  transition: transform 0.2s;
+.doc-action-btn.web-btn {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
 }
 
-.source-doc-card:hover .btn-arrow {
+.doc-action-btn.web-btn:hover {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+
+.doc-action-btn .btn-arrow {
+  font-size: 0.8em;
+  transition: transform 0.15s;
+}
+
+.doc-action-btn.web-btn:hover .btn-arrow {
   transform: translate(2px, -2px);
 }
 

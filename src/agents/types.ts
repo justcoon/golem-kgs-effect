@@ -266,6 +266,18 @@ export const DocumentResultSchema = Schema.Struct({
 });
 export type DocumentResult = typeof DocumentResultSchema.Type;
 
+export const DocumentSummarySchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  source: Schema.String,
+  resourceName: Schema.String,
+  sourceKey: Schema.String,
+  sizeBytes: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type DocumentSummary = typeof DocumentSummarySchema.Type;
+
 // --- Path Finding Schemas ---
 
 export const PathFindingQuerySchema = Schema.Struct({

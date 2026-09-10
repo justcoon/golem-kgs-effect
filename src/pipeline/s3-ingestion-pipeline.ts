@@ -2,7 +2,7 @@ import { Effect, Option } from "effect";
 import { type S3TaskMetrics, type S3TaskState } from "../agents/types.js";
 import { type S3CursorData } from "../connectors/connector-base.js";
 import { S3ConnectorService } from "../connectors/s3-connector.js";
-import { DocumentChunker } from "./chunker.js";
+import { processAndIndexDocument } from "./document-processor.js";
 import { EmbeddingService } from "./embedding-service.js";
 import { EntityResolverService } from "./entity-resolver.js";
 import { ExtractionService } from "./extractor.js";
@@ -44,12 +44,7 @@ export function runS3Ingestion(
     const force = options?.force ?? false;
 
     const s3Service = yield* S3ConnectorService;
-    const docRepo = yield* DocumentRepository;
-    const chunkRepo = yield* ChunkRepository;
     const checkpointRepo = yield* CheckpointRepository;
-    const entityResolver = yield* EntityResolverService;
-    const embeddingService = yield* EmbeddingService;
-    const extractionService = yield* ExtractionService;
 
     const connector = yield* s3Service.createConnector(resourceName);
 
@@ -74,25 +69,7 @@ export function runS3Ingestion(
     for (const item of discoveredItems) {
       const itemEffect = Effect.gen(function* () {
         const { document } = yield* connector.fetch(item);
-        yield* docRepo.saveDocument(document);
-
-        const chunkResult = yield* DocumentChunker.chunkDocument(document);
-        if (chunkResult.chunks.length > 0) {
-          const texts = chunkResult.chunks.map((c) => c.content);
-          const embeddings = yield* embeddingService.generateEmbeddings(texts);
-
-          for (let i = 0; i < chunkResult.chunks.length; i++) {
-            const chunk = chunkResult.chunks[i]!;
-            const emb = embeddings[i];
-            yield* chunkRepo.upsertChunk({
-              ...chunk,
-              embedding: emb,
-            });
-
-            const knowledge = yield* extractionService.extractFromChunk(chunk);
-            yield* entityResolver.fuseKnowledge(knowledge);
-          }
-        }
+        yield* processAndIndexDocument(document);
         newProcessedKeys[item.id] = item.eTag ?? "";
         syncedCount++;
       });

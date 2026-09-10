@@ -6,6 +6,7 @@ import { Schema } from "effect";
 import {
   AnswerResponseSchema,
   CoordinatorStateSchema,
+  DocumentSummarySchema,
   EntityResultSchema,
   EntitySearchRequestSchema,
   EntitySearchResponseSchema,
@@ -128,6 +129,17 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
     it("should match KnowledgeAccessAgent entity lookup route: /api/knowledge/entities/{id}", () => {
       const pattern = "/api/knowledge/entities/{id}";
       const params = matchRoute(pattern, "/api/knowledge/entities/ent_golem_1");
+
+      assert.ok(params !== null);
+      assert.equal(params?.id, "ent_golem_1");
+    });
+
+    it("should match KnowledgeAccessAgent entity documents route: /api/knowledge/entities/{id}/documents", () => {
+      const pattern = "/api/knowledge/entities/{id}/documents";
+      const params = matchRoute(
+        pattern,
+        "/api/knowledge/entities/ent_golem_1/documents",
+      );
 
       assert.ok(params !== null);
       assert.equal(params?.id, "ent_golem_1");
@@ -279,6 +291,29 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(decoded.aggregatedMetrics.totalRunsTriggered, 15);
       assert.equal(decoded.aggregatedMetrics.totalSuccesses, 14);
       assert.equal(decoded.schedules["s3:main"].status, "ACTIVE");
+    });
+
+    it("should validate DocumentSummarySchema for GET /api/knowledge/entities/{id}/documents", () => {
+      const summaryRaw = {
+        id: "doc_web_1",
+        title: "Golem Quickstart",
+        source: "web",
+        resourceName: "golem-docs",
+        sourceKey: "https://learn.golem.cloud/v1.5/quickstart",
+        sizeBytes: 4096,
+        createdAt: "2026-09-10T10:00:00.000Z",
+        updatedAt: "2026-09-10T10:00:00.000Z",
+      };
+
+      const decoded = Schema.decodeUnknownSync(DocumentSummarySchema)(
+        summaryRaw,
+      );
+      assert.equal(decoded.id, "doc_web_1");
+      assert.equal(
+        decoded.sourceKey,
+        "https://learn.golem.cloud/v1.5/quickstart",
+      );
+      assert.equal(decoded.sizeBytes, 4096);
     });
 
     it("should validate SearchResponseSchema for POST /api/knowledge/search", () => {

@@ -583,6 +583,7 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
         Effect.sync(() => Array.from(mockEntities.values()).slice(0, limit)),
       deleteEntity: () => Effect.succeed(true),
       count: () => Effect.succeed(mockEntities.size),
+      getRelatedDocuments: () => Effect.succeed([]),
     };
 
     const mockGraphRepo: GraphRepositoryShape = {

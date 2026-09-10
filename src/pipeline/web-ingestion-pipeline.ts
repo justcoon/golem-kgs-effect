@@ -6,7 +6,7 @@ import {
 } from "../agents/types.js";
 import { type WebCursorData } from "../connectors/connector-base.js";
 import { WebConnectorService } from "../connectors/web-connector.js";
-import { DocumentChunker } from "./chunker.js";
+import { processAndIndexDocument } from "./document-processor.js";
 import { EmbeddingService } from "./embedding-service.js";
 import { EntityResolverService } from "./entity-resolver.js";
 import { ExtractionService } from "./extractor.js";
@@ -48,12 +48,7 @@ export function runWebIngestion(
     const force = options?.force ?? false;
 
     const webService = yield* WebConnectorService;
-    const docRepo = yield* DocumentRepository;
-    const chunkRepo = yield* ChunkRepository;
     const checkpointRepo = yield* CheckpointRepository;
-    const entityResolver = yield* EntityResolverService;
-    const embeddingService = yield* EmbeddingService;
-    const extractionService = yield* ExtractionService;
 
     const connector = yield* webService.createConnector(resourceName);
 
@@ -77,25 +72,7 @@ export function runWebIngestion(
     for (const item of discoveredItems) {
       const itemEffect = Effect.gen(function* () {
         const { document } = yield* connector.fetch(item);
-        yield* docRepo.saveDocument(document);
-
-        const chunkResult = yield* DocumentChunker.chunkDocument(document);
-        if (chunkResult.chunks.length > 0) {
-          const texts = chunkResult.chunks.map((c) => c.content);
-          const embeddings = yield* embeddingService.generateEmbeddings(texts);
-
-          for (let i = 0; i < chunkResult.chunks.length; i++) {
-            const chunk = chunkResult.chunks[i]!;
-            const emb = embeddings[i];
-            yield* chunkRepo.upsertChunk({
-              ...chunk,
-              embedding: emb,
-            });
-
-            const knowledge = yield* extractionService.extractFromChunk(chunk);
-            yield* entityResolver.fuseKnowledge(knowledge);
-          }
-        }
+        yield* processAndIndexDocument(document);
 
         const meta = (document.metadata ?? {}) as Record<string, unknown>;
         newProcessedUrls[item.id] = {
