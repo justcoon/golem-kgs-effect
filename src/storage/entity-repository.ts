@@ -281,6 +281,33 @@ EntityRepository.Default = Layer.effect(
     const getRelatedDocuments = (entityId: string, limit = 50) =>
       Effect.gen(function* () {
         const rows = (yield* sql<DocumentSummaryRow>`
+            WITH doc_refs AS (
+                SELECT c.document_id AS ref
+                FROM entity_chunks ec
+                JOIN chunks c ON ec.chunk_id = c.id
+                WHERE ec.entity_id = ${entityId}
+
+                UNION
+
+                SELECT (e.properties->>'extractedFromDocument')::varchar AS ref
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND e.properties ? 'extractedFromDocument'
+
+                UNION
+
+                SELECT (e.properties->>'extracted_from_document')::varchar AS ref
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND e.properties ? 'extracted_from_document'
+
+                UNION
+
+                SELECT jsonb_array_elements_text(e.properties->'documents')::varchar AS ref
+                FROM entities e
+                WHERE e.id = ${entityId}
+                  AND jsonb_typeof(e.properties->'documents') = 'array'
+            )
             SELECT DISTINCT
                 d.id,
                 d.title,
@@ -291,26 +318,8 @@ EntityRepository.Default = Layer.effect(
                 d.created_at,
                 d.updated_at
             FROM documents d
-            WHERE d.id IN (
-                SELECT c.document_id
-                FROM entity_chunks ec
-                JOIN chunks c ON ec.chunk_id = c.id
-                WHERE ec.entity_id = ${entityId}
-
-                UNION
-
-                SELECT (e.properties->>'extractedFromDocument')::varchar
-                FROM entities e
-                WHERE e.id = ${entityId}
-                  AND e.properties ? 'extractedFromDocument'
-
-                UNION
-
-                SELECT jsonb_array_elements_text(e.properties->'documents')::varchar
-                FROM entities e
-                WHERE e.id = ${entityId}
-                  AND jsonb_typeof(e.properties->'documents') = 'array'
-            )
+            WHERE d.id IN (SELECT ref FROM doc_refs)
+               OR d.source_key IN (SELECT ref FROM doc_refs)
             ORDER BY d.updated_at DESC
             LIMIT ${limit}
           `) as ReadonlyArray<DocumentSummaryRow>;

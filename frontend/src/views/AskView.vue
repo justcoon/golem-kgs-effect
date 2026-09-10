@@ -16,6 +16,8 @@ const maxHops = ref(2);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const response = ref<AnswerResponse | null>(null);
+const entitiesExpanded = ref(false);
+const relationshipsExpanded = ref(false);
 
 const sampleQuestions = [
   "What is Golem Cloud and how does it achieve durable execution?",
@@ -150,36 +152,66 @@ function handleSelectEntity(entity: EntityResult) {
 
         <!-- Grounded Entities Section -->
         <div v-if="response.groundedEntities && response.groundedEntities.length > 0" class="grounding-block">
-          <label class="block-label">Grounded Entities ({{ response.groundedEntities.length }}):</label>
-          <div class="entities-wrap">
-            <button
-              v-for="ent in response.groundedEntities"
-              :key="ent.id"
-              class="entity-pill"
-              @click="handleSelectEntity(ent)"
-              title="Click to view details"
-            >
-              <span class="ent-type">{{ ent.entityType || 'ENTITY' }}</span>
-              <span class="ent-name">{{ ent.name || ent.id }}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            class="grounding-toggle-btn"
+            @click="entitiesExpanded = !entitiesExpanded"
+            :aria-expanded="entitiesExpanded"
+          >
+            <div class="grounding-toggle-left">
+              <span class="collapse-icon" :class="{ open: entitiesExpanded }">▶</span>
+              <span class="block-label">Grounded Entities</span>
+              <span class="badge-count">{{ response.groundedEntities.length }}</span>
+            </div>
+            <span class="toggle-hint">{{ entitiesExpanded ? 'Hide' : 'Show' }}</span>
+          </button>
+
+          <transition name="expand">
+            <div v-show="entitiesExpanded" class="entities-wrap">
+              <button
+                v-for="ent in response.groundedEntities"
+                :key="ent.id"
+                class="entity-pill"
+                @click="handleSelectEntity(ent)"
+                title="Click to view details"
+              >
+                <span class="ent-type">{{ ent.entityType || 'ENTITY' }}</span>
+                <span class="ent-name">{{ ent.name || ent.id }}</span>
+              </button>
+            </div>
+          </transition>
         </div>
 
         <!-- Grounded Relationships Section -->
         <div v-if="response.groundedRelationships && response.groundedRelationships.length > 0" class="grounding-block">
-          <label class="block-label">Grounded Relationships ({{ response.groundedRelationships.length }}):</label>
-          <div class="edges-wrap">
-            <span
-              v-for="edge in response.groundedRelationships"
-              :key="`${edge.sourceId}-${edge.relationType}-${edge.targetId}`"
-              class="edge-pill"
-            >
-              <code class="edge-node">{{ edge.sourceId }}</code>
-              <span class="edge-rel">── {{ edge.relationType }} ──▶</span>
-              <code class="edge-node">{{ edge.targetId }}</code>
-              <span v-if="edge.confidence" class="edge-conf">{{ formatPercent(edge.confidence) }}</span>
-            </span>
-          </div>
+          <button
+            type="button"
+            class="grounding-toggle-btn"
+            @click="relationshipsExpanded = !relationshipsExpanded"
+            :aria-expanded="relationshipsExpanded"
+          >
+            <div class="grounding-toggle-left">
+              <span class="collapse-icon" :class="{ open: relationshipsExpanded }">▶</span>
+              <span class="block-label">Grounded Relationships</span>
+              <span class="badge-count">{{ response.groundedRelationships.length }}</span>
+            </div>
+            <span class="toggle-hint">{{ relationshipsExpanded ? 'Hide' : 'Show' }}</span>
+          </button>
+
+          <transition name="expand">
+            <div v-show="relationshipsExpanded" class="edges-wrap">
+              <span
+                v-for="edge in response.groundedRelationships"
+                :key="`${edge.sourceId}-${edge.relationType}-${edge.targetId}`"
+                class="edge-pill"
+              >
+                <code class="edge-node">{{ edge.sourceId }}</code>
+                <span class="edge-rel">── {{ edge.relationType }} ──▶</span>
+                <code class="edge-node">{{ edge.targetId }}</code>
+                <span v-if="edge.confidence" class="edge-conf">{{ formatPercent(edge.confidence) }}</span>
+              </span>
+            </div>
+          </transition>
         </div>
       </div>
 
@@ -450,25 +482,108 @@ function handleSelectEntity(entity: EntityResult) {
 }
 
 .grounding-block {
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.block-label {
-  display: block;
+.grounding-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.grounding-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.grounding-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.collapse-icon {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s;
+  display: inline-block;
+  line-height: 1;
+}
+
+.collapse-icon.open {
+  transform: rotate(90deg);
+  color: #38bdf8;
+}
+
+.grounding-toggle-btn .block-label {
+  display: inline-block;
   font-size: 0.75rem;
   text-transform: uppercase;
   font-weight: 700;
   color: var(--text-muted);
   letter-spacing: 0.05em;
-  margin-bottom: 12px;
+  margin-bottom: 0;
+  transition: color 0.2s;
+}
+
+.grounding-toggle-btn:hover .block-label {
+  color: #f1f5f9;
+}
+
+.badge-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #38bdf8;
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.toggle-hint {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.grounding-toggle-btn:hover .toggle-hint {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 .entities-wrap {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 12px;
+  padding-left: 4px;
+}
+
+.expand-enter-active,
+.expand-leave-active {
+  transition: all 0.22s ease-out;
+  overflow: hidden;
+}
+
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .entity-pill {
@@ -506,6 +621,8 @@ function handleSelectEntity(entity: EntityResult) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-top: 12px;
+  padding-left: 4px;
 }
 
 .edge-pill {

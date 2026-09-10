@@ -27,6 +27,7 @@ const extractedFromDoc = computed<string | null>(() => {
 
 const relatedDocs = ref<DocumentSummary[]>([]);
 const loadingDocs = ref(false);
+const docsExpanded = ref(true);
 
 watch(
   () => [props.isOpen, props.entity?.id],
@@ -42,11 +43,13 @@ watch(
 
     if (Array.isArray(propsDocs)) {
       for (const d of propsDocs) {
-        if (typeof d === 'string' && d.trim().length > 0) {
-          const trimmed = d.trim();
+        const id = getDocId(d);
+        const label = getDocLabel(d) || id;
+        if (id && id.trim().length > 0) {
+          const trimmed = id.trim();
           initialFallback.push({
             id: trimmed,
-            title: trimmed,
+            title: label,
             source: trimmed.startsWith('http') ? 'web' : 'document',
             resourceName: 'default',
             sourceKey: trimmed,
@@ -87,12 +90,48 @@ watch(
 );
 
 function isDocKey(key: string | number): boolean {
-  const k = String(key);
+  const k = String(key).toLowerCase().replace(/[-_]/g, '');
   return (
-    k === 'extractedFromDocument' ||
-    k === 'extracted_from_document' ||
-    k === 'documents'
+    k === 'extractedfromdocument' ||
+    k === 'documents' ||
+    k === 'document' ||
+    k === 'doc' ||
+    k === 'docs' ||
+    k === 'documentid' ||
+    k === 'sourcekey' ||
+    k === 'sourceurl'
   );
+}
+
+const displayProperties = computed<Record<string, unknown>>(() => {
+  if (!props.entity?.properties) return {};
+  const filtered: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(props.entity.properties)) {
+    if (!isDocKey(key)) {
+      filtered[key] = val;
+    }
+  }
+  return filtered;
+});
+
+function getDocId(d: unknown): string {
+  if (!d) return '';
+  if (typeof d === 'string') return d;
+  if (typeof d === 'object') {
+    const obj = d as Record<string, unknown>;
+    return String(obj.id || obj.sourceKey || obj.title || '');
+  }
+  return String(d);
+}
+
+function getDocLabel(d: unknown): string {
+  if (!d) return '';
+  if (typeof d === 'string') return d;
+  if (typeof d === 'object') {
+    const obj = d as Record<string, unknown>;
+    return String(obj.title || obj.sourceKey || obj.id || JSON.stringify(obj));
+  }
+  return String(d);
 }
 
 function isWebUrl(sourceKey?: string, source?: string): boolean {
@@ -105,7 +144,6 @@ function navigateToDoc(docId?: string | null) {
   const target = docId || extractedFromDoc.value;
   if (target) {
     emit('open-document', target);
-    emit('preview-document', target);
   }
 }
 </script>
@@ -133,54 +171,72 @@ function navigateToDoc(docId?: string | null) {
           v-if="loadingDocs || relatedDocs.length > 0 || extractedFromDoc"
           class="drawer-section related-docs-section"
         >
-          <div class="section-header-row">
-            <label class="section-label">Related Documents</label>
-            <span v-if="relatedDocs.length > 0" class="badge-count">{{ relatedDocs.length }}</span>
-            <span v-if="loadingDocs" class="loading-spinner-tiny" title="Loading related documents...">⏳</span>
-          </div>
+          <button
+            type="button"
+            class="section-toggle-btn"
+            @click="docsExpanded = !docsExpanded"
+            :aria-expanded="docsExpanded"
+          >
+            <div class="section-toggle-left">
+              <span class="collapse-icon" :class="{ open: docsExpanded }">▶</span>
+              <span class="section-label">Related Documents</span>
+              <span v-if="relatedDocs.length > 0" class="badge-count">{{ relatedDocs.length }}</span>
+              <span v-if="loadingDocs" class="loading-spinner-tiny" title="Loading related documents...">⏳</span>
+            </div>
+            <span class="toggle-hint">{{ docsExpanded ? 'Hide' : 'Show' }}</span>
+          </button>
 
-          <div class="related-docs-list">
-            <div
-              v-for="doc in relatedDocs"
-              :key="doc.id"
-              class="related-doc-card"
-            >
-              <div class="doc-card-main" @click="navigateToDoc(doc.id)">
-                <div class="doc-icon-wrap" :class="doc.source">
-                  <span class="doc-icon">{{ doc.source === 'web' ? '🌐' : '📄' }}</span>
-                </div>
-                <div class="doc-content">
-                  <div class="doc-title-row">
-                    <span class="doc-title-text" :title="doc.title || doc.id">{{ doc.title || doc.id }}</span>
-                    <span v-if="doc.id === extractedFromDoc" class="origin-tag" title="First extracted from this document">Origin</span>
-                    <span class="source-tag" :class="doc.source">{{ doc.source.toUpperCase() }}</span>
+          <transition name="expand">
+            <div v-show="docsExpanded" class="related-docs-content">
+              <div v-if="relatedDocs.length > 0" class="related-docs-list">
+                <div
+                  v-for="doc in relatedDocs"
+                  :key="doc.id"
+                  class="related-doc-card"
+                >
+                  <div class="doc-card-main" @click="navigateToDoc(doc.id)">
+                    <div class="doc-icon-wrap" :class="doc.source || 'document'">
+                      <span class="doc-icon">{{ doc.source === 'web' ? '🌐' : '📄' }}</span>
+                    </div>
+                    <div class="doc-content">
+                      <div class="doc-title-row">
+                        <span class="doc-title-text" :title="doc.title || doc.id">{{ doc.title || doc.id }}</span>
+                        <div class="doc-badges">
+                          <span v-if="doc.id === extractedFromDoc || doc.sourceKey === extractedFromDoc" class="origin-tag" title="First extracted from this document">Origin</span>
+                          <span class="source-tag" :class="doc.source || 'document'">{{ (doc.source || 'document').toUpperCase() }}</span>
+                        </div>
+                      </div>
+                      <div class="doc-sub-key" :title="doc.sourceKey || doc.id">{{ doc.sourceKey || doc.id }}</div>
+                    </div>
                   </div>
-                  <div class="doc-sub-key" :title="doc.sourceKey || doc.id">{{ doc.sourceKey || doc.id }}</div>
+
+                  <div class="doc-actions-row">
+                    <button
+                      class="doc-action-btn view-btn"
+                      @click="navigateToDoc(doc.id)"
+                      title="Open document preview modal"
+                    >
+                      <span>👁️ Preview</span>
+                    </button>
+                    <a
+                      v-if="isWebUrl(doc.sourceKey, doc.source)"
+                      :href="doc.sourceKey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="doc-action-btn web-btn"
+                      title="Open live webpage in new tab"
+                    >
+                      <span>🌐 Visit Page</span>
+                      <span class="btn-arrow">↗</span>
+                    </a>
+                  </div>
                 </div>
               </div>
-
-              <div class="doc-actions-row">
-                <button
-                  class="doc-action-btn view-btn"
-                  @click="navigateToDoc(doc.id)"
-                  title="Open document preview modal"
-                >
-                  <span>👁️ Preview</span>
-                </button>
-                <a
-                  v-if="isWebUrl(doc.sourceKey, doc.source)"
-                  :href="doc.sourceKey"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="doc-action-btn web-btn"
-                  title="Open live webpage in new tab"
-                >
-                  <span>🌐 Visit Page</span>
-                  <span class="btn-arrow">↗</span>
-                </a>
+              <div v-else-if="!loadingDocs" class="empty-docs-msg">
+                No related documents indexed yet.
               </div>
             </div>
-          </div>
+          </transition>
         </div>
 
         <div v-if="entity.description" class="drawer-section">
@@ -190,32 +246,14 @@ function navigateToDoc(docId?: string | null) {
 
         <div class="drawer-section">
           <label class="section-label">Properties</label>
-          <div v-if="Object.keys(entity.properties || {}).length > 0" class="props-grid">
+          <div v-if="Object.keys(displayProperties).length > 0" class="props-grid">
             <div
-              v-for="(val, key) in entity.properties"
+              v-for="(val, key) in displayProperties"
               :key="key"
               class="prop-item"
-              :class="{ 'is-doc-prop': isDocKey(key) && typeof val === 'string' }"
             >
-              <template v-if="isDocKey(key) && typeof val === 'string'">
-                <div class="prop-doc-header">
-                  <span class="prop-key">{{ key }}</span>
-                  <span class="doc-pill-hint">Document</span>
-                </div>
-                <button
-                  class="prop-doc-btn"
-                  @click="navigateToDoc(val)"
-                  :title="`Open document: ${val}`"
-                >
-                  <span class="doc-icon">📄</span>
-                  <span class="doc-name">{{ val }}</span>
-                  <span class="doc-arrow">↗</span>
-                </button>
-              </template>
-              <template v-else>
-                <span class="prop-key">{{ key }}</span>
-                <span class="prop-value">{{ typeof val === 'object' ? JSON.stringify(val) : val }}</span>
-              </template>
+              <span class="prop-key">{{ key }}</span>
+              <span class="prop-value">{{ typeof val === 'object' ? JSON.stringify(val) : val }}</span>
             </div>
           </div>
           <p v-else class="empty-muted">No custom properties</p>
@@ -243,7 +281,7 @@ function navigateToDoc(docId?: string | null) {
 
 .drawer-panel {
   width: 100%;
-  max-width: 440px;
+  max-width: 480px;
   height: 100%;
   background: #0f172a;
   border-left: 1px solid var(--border-color);
@@ -371,10 +409,52 @@ function navigateToDoc(docId?: string | null) {
   gap: 10px;
 }
 
-.section-header-row {
+.section-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.section-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.section-toggle-left {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.collapse-icon {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s;
+  display: inline-block;
+  line-height: 1;
+}
+
+.collapse-icon.open {
+  transform: rotate(90deg);
+  color: #38bdf8;
+}
+
+.section-toggle-btn .section-label {
+  display: inline-block;
+  margin-bottom: 0;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.section-toggle-btn:hover .section-label {
+  color: #f1f5f9;
 }
 
 .badge-count {
@@ -392,13 +472,45 @@ function navigateToDoc(docId?: string | null) {
   animation: pulse 1.5s infinite;
 }
 
+.toggle-hint {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.section-toggle-btn:hover .toggle-hint {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.related-docs-content {
+  margin-top: 4px;
+}
+
+.expand-enter-active,
+.expand-leave-active {
+  transition: all 0.22s ease-out;
+  overflow: hidden;
+}
+
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
 .related-docs-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 280px;
-  overflow-y: auto;
-  padding-right: 4px;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .related-doc-card {
@@ -408,10 +520,12 @@ function navigateToDoc(docId?: string | null) {
   background: linear-gradient(135deg, rgba(30, 41, 59, 0.75), rgba(15, 23, 42, 0.85));
   border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 12px;
   position: relative;
   overflow: hidden;
   transition: border-color 0.2s, background 0.2s;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .related-doc-card:hover {
@@ -424,6 +538,8 @@ function navigateToDoc(docId?: string | null) {
   align-items: flex-start;
   gap: 10px;
   cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .doc-icon-wrap {
@@ -437,6 +553,7 @@ function navigateToDoc(docId?: string | null) {
   justify-content: center;
   font-size: 1rem;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .doc-icon-wrap.web {
@@ -449,24 +566,34 @@ function navigateToDoc(docId?: string | null) {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .doc-title-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 
 .doc-title-text {
-  font-size: 0.85rem;
+  font-size: 0.88rem;
   font-weight: 600;
   color: #f1f5f9;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .origin-tag {
@@ -500,18 +627,25 @@ function navigateToDoc(docId?: string | null) {
 
 .doc-sub-key {
   font-family: 'JetBrains Mono', monospace, sans-serif;
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   color: var(--text-muted, #94a3b8);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.4;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 5px 8px;
+  border-radius: 5px;
+  margin-top: 4px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .doc-actions-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .doc-action-btn {
@@ -648,6 +782,13 @@ function navigateToDoc(docId?: string | null) {
   overflow-wrap: anywhere;
   min-width: 0;
   flex: 1;
+}
+
+.prop-docs-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
 }
 
 .prop-doc-btn {

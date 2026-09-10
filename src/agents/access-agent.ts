@@ -354,7 +354,8 @@ export const KnowledgeAccessAgent = defineAgent({
       getEntityDocuments: ({ id }) =>
         Effect.gen(function* () {
           const entityRepo = yield* EntityRepository;
-          const docs = yield* entityRepo.getRelatedDocuments(id);
+          const resolvedId = yield* resolveEntityId(id, entityRepo);
+          const docs = yield* entityRepo.getRelatedDocuments(resolvedId);
           return docs.map((doc) => ({
             id: doc.id,
             title: doc.title,
