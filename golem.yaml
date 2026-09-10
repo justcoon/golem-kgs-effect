@@ -32,28 +32,6 @@ secretDefaults:
             - "https://learn.golem.cloud"
           includePatterns:
             - "/v1.5/"
-#          sitemapUrl: "https://learn.golem.cloud/sitemap.xml"
-#          includePatterns:
-#            - "/docs/"
-#        - name: "effect-specs"
-#          baseUrl: "https://raw.githubusercontent.com"
-#          seedUrls:
-#            - "https://raw.githubusercontent.com/golemcloud/effect-golem/main/README.md"
-#            - "https://raw.githubusercontent.com/golemcloud/golem/main/README.md"
-#       - name: "legal"
-#         endpoint: "{{ S3_ENDPOINT_URL }}"
-#         region: "{{ AWS_DEFAULT_REGION }}"
-#         bucket: "legal-docs"
-#         accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
-#         secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
-#       - name: "technical"
-#         endpoint: "{{ S3_ENDPOINT_URL }}"
-#         region: "{{ AWS_DEFAULT_REGION }}"
-#         bucket: "technical-docs"
-#         prefixes:
-#           - "architecture/"
-#         accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
-#         secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
 
 
 components:
