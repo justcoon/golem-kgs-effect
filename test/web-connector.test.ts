@@ -244,15 +244,15 @@ describe("Web Connector & Ingestion Subsystem", () => {
     });
 
     it("should resolve valid URLs and reject garbage", () => {
-      assert.equal(
-        resolveUrl("https://example.com/path/", "subpage"),
-        "https://example.com/path/subpage",
-      );
-      assert.equal(
-        resolveUrl("https://example.com/path/", "../other"),
-        "https://example.com/other",
-      );
-      assert.equal(resolveUrl("invalid-base", "relative"), undefined);
+      const u1 = resolveUrl("https://example.com/path/", "subpage");
+      assert.ok(Option.isSome(u1));
+      assert.equal(u1.value.toString(), "https://example.com/path/subpage");
+
+      const u2 = resolveUrl("https://example.com/path/", "../other");
+      assert.ok(Option.isSome(u2));
+      assert.equal(u2.value.toString(), "https://example.com/other");
+
+      assert.ok(Option.isNone(resolveUrl("invalid-base", "relative")));
     });
   });
 

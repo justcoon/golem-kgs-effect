@@ -12,10 +12,12 @@ import {
   PathFindingResultSchema,
   SearchResponseSchema,
   type Citation,
+  type DocumentResult,
   type EntityResult,
   type SearchResultItem,
 } from "./types.js";
 import { type Entity } from "../domain/entity.js";
+import { type RawDocument } from "../domain/provenance.js";
 import { AppAgentConfig } from "../config/agent-config.js";
 import {
   CheckpointRepository,
@@ -35,6 +37,20 @@ const mapEntityToResult = (entity: Entity): EntityResult => ({
   description: entity.description ?? null,
   properties: entity.properties,
   metadata: entity.metadata,
+});
+
+const mapDocumentToResult = (doc: RawDocument): DocumentResult => ({
+  id: doc.id,
+  title: doc.title,
+  content: doc.content,
+  metadata: doc.metadata,
+  tags: doc.tags,
+  source: doc.source,
+  resourceName: doc.resourceName,
+  sourceKey: doc.sourceKey,
+  sizeBytes: doc.sizeBytes,
+  createdAt: new Date(doc.createdAt).toISOString(),
+  updatedAt: new Date(doc.updatedAt).toISOString(),
 });
 
 const resolveEntityId = (input: string, entityRepo: EntityRepositoryShape) =>
@@ -74,11 +90,9 @@ const fetchEntitiesByIds = (
   ids: ReadonlyArray<string>,
   entityRepo: EntityRepositoryShape,
 ) =>
-  Effect.forEach(ids, (id) => entityRepo.findById(id)).pipe(
-    Effect.map((options) =>
-      options.filter(Option.isSome).map((opt) => mapEntityToResult(opt.value)),
-    ),
-  );
+  entityRepo
+    .findByIds(ids)
+    .pipe(Effect.map((entities) => entities.map(mapEntityToResult)));
 
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
@@ -287,9 +301,7 @@ export const KnowledgeAccessAgent = defineAgent({
           const result = yield* graphRepo.getNeighborhood({
             seedEntityIds: [resolvedId],
             depth: maxDepth ?? 1,
-            relationTypes: relationTypes
-              ? Array.from(relationTypes)
-              : undefined,
+            relationTypes,
             minConfidence: minConfidence ?? 0.0,
           });
 
@@ -315,18 +327,7 @@ export const KnowledgeAccessAgent = defineAgent({
         Effect.gen(function* () {
           const entityRepo = yield* EntityRepository;
           const opt = yield* entityRepo.findById(id);
-          if (opt._tag === "None") {
-            return null;
-          }
-          const entity = opt.value;
-          return {
-            id: entity.id,
-            name: entity.name,
-            entityType: entity.entityType,
-            description: entity.description ?? null,
-            properties: entity.properties,
-            metadata: entity.metadata,
-          };
+          return opt.pipe(Option.map(mapEntityToResult), Option.getOrNull);
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
       getEntityDocuments: ({ id }) =>
@@ -349,23 +350,7 @@ export const KnowledgeAccessAgent = defineAgent({
         Effect.gen(function* () {
           const docRepo = yield* DocumentRepository;
           const opt = yield* docRepo.findDocumentById(id);
-          if (opt._tag === "None") {
-            return null;
-          }
-          const doc = opt.value;
-          return {
-            id: doc.id,
-            title: doc.title,
-            content: doc.content,
-            metadata: doc.metadata,
-            tags: doc.tags,
-            source: doc.source,
-            resourceName: doc.resourceName,
-            sourceKey: doc.sourceKey,
-            sizeBytes: doc.sizeBytes,
-            createdAt: new Date(doc.createdAt).toISOString(),
-            updatedAt: new Date(doc.updatedAt).toISOString(),
-          };
+          return opt.pipe(Option.map(mapDocumentToResult), Option.getOrNull);
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
       graphRag: (query) =>
@@ -376,21 +361,12 @@ export const KnowledgeAccessAgent = defineAgent({
             topK: query.topK,
             maxHops: query.maxHops,
             minConfidence: query.minConfidence,
-            relationTypes: query.relationTypes
-              ? Array.from(query.relationTypes)
-              : undefined,
+            relationTypes: query.relationTypes,
           });
 
           return {
             query: bundle.query,
-            entities: bundle.entities.map((e) => ({
-              id: e.id,
-              name: e.name,
-              entityType: e.entityType,
-              description: e.description ?? null,
-              properties: e.properties,
-              metadata: e.metadata,
-            })),
+            entities: bundle.entities.map(mapEntityToResult),
             relationships: bundle.relationships.map((e) => ({
               sourceId: e.sourceId,
               targetId: e.targetId,
@@ -429,9 +405,7 @@ export const KnowledgeAccessAgent = defineAgent({
             sourceEntityId: resolvedSourceId,
             targetEntityId: resolvedTargetId,
             maxDepth: query.maxDepth,
-            relationTypes: query.relationTypes
-              ? Array.from(query.relationTypes)
-              : undefined,
+            relationTypes: query.relationTypes,
             direction: query.direction,
           });
 
@@ -497,14 +471,7 @@ export const KnowledgeAccessAgent = defineAgent({
             };
           });
 
-          const groundedEntities = bundle.entities.map((e) => ({
-            id: e.id,
-            name: e.name,
-            entityType: e.entityType,
-            description: e.description ?? null,
-            properties: e.properties,
-            metadata: e.metadata,
-          }));
+          const groundedEntities = bundle.entities.map(mapEntityToResult);
 
           const groundedRelationships = bundle.relationships.map((e) => ({
             sourceId: e.sourceId,
@@ -577,9 +544,9 @@ export const KnowledgeAccessAgent = defineAgent({
             { concurrency: 5 },
           );
 
-          const lastSynchronizedAt = Option.isSome(lastSyncOpt)
-            ? lastSyncOpt.value.toISOString()
-            : null;
+          const lastSynchronizedAt = Option.map(lastSyncOpt, (d) =>
+            d.toISOString(),
+          ).pipe(Option.getOrNull);
 
           const supportedSources = ["s3"];
 

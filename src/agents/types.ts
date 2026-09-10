@@ -1,4 +1,6 @@
-import { Schema, SchemaGetter } from "effect";
+import { Option, Schema, SchemaGetter } from "effect";
+
+const tryParseJson = Option.liftThrowable(JSON.parse);
 
 /**
  * Schema representing arbitrary JSON data lowered to a string for WIT compatibility.
@@ -8,11 +10,7 @@ export const JsonFromString = Schema.String.pipe(
   Schema.decodeTo(Schema.Unknown, {
     decode: SchemaGetter.transform((s) => {
       if (!s) return {};
-      try {
-        return JSON.parse(s);
-      } catch {
-        return s;
-      }
+      return tryParseJson(s).pipe(Option.getOrElse(() => s));
     }),
     encode: SchemaGetter.transform((u) => {
       if (u === undefined || u === null) return "{}";

@@ -67,16 +67,17 @@ export function runS3Ingestion(
     let failedCount = 0;
 
     for (const item of discoveredItems) {
-      const itemEffect = Effect.gen(function* () {
-        const { document } = yield* connector.fetch(item);
-        yield* processAndIndexDocument(document);
-        newProcessedKeys[item.id] = item.eTag ?? "";
-        syncedCount++;
-      });
-
-      const ok = yield* itemEffect.pipe(
-        Effect.map(() => true),
-        Effect.catch(() => Effect.succeed(false)),
+      const ok = yield* Effect.match(
+        Effect.gen(function* () {
+          const { document } = yield* connector.fetch(item);
+          yield* processAndIndexDocument(document);
+          newProcessedKeys[item.id] = item.eTag ?? "";
+          syncedCount++;
+        }),
+        {
+          onFailure: () => false,
+          onSuccess: () => true,
+        },
       );
       if (!ok) {
         failedCount++;

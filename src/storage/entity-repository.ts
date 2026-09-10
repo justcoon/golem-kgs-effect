@@ -1,6 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Pg } from "@golemcloud/effect-golem/postgres";
+import { Pg, parseJsonOr } from "./database-client.js";
 import {
   type CreateEntityInput,
   type Entity,
@@ -56,14 +56,8 @@ const mapEntityRow = (row: EntityRow): Entity => ({
   name: row.name,
   entityType: row.entity_type as EntityType,
   description: row.description,
-  properties:
-    typeof row.properties === "string"
-      ? JSON.parse(row.properties)
-      : ((row.properties as Record<string, unknown>) ?? {}),
-  metadata:
-    typeof row.metadata === "string"
-      ? JSON.parse(row.metadata)
-      : ((row.metadata as Record<string, unknown>) ?? {}),
+  properties: parseJsonOr(row.properties, {}),
+  metadata: parseJsonOr(row.metadata, {}),
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
 });
@@ -98,6 +92,20 @@ EntityRepository.Default = Layer.effect(
 
         const row = rows[0];
         return row ? Option.some(mapEntityRow(row)) : Option.none();
+      });
+
+    const findByIds = (ids: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        if (ids.length === 0) {
+          return [] as ReadonlyArray<Entity>;
+        }
+        const rows = (yield* sql<EntityRow>`
+            SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
+            FROM entities
+            WHERE id = ANY(${Pg.array(ids)})
+          `) as ReadonlyArray<EntityRow>;
+
+        return rows.map(mapEntityRow);
       });
 
     const findByName = (name: string) =>
@@ -312,6 +320,7 @@ EntityRepository.Default = Layer.effect(
 
     return {
       findById,
+      findByIds,
       findByName,
       findByAlias,
       upsertEntity,

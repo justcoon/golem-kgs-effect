@@ -1,6 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Pg } from "@golemcloud/effect-golem/postgres";
+import { Pg, parseJsonOr } from "./database-client.js";
 import { type RawDocument } from "../domain/provenance.js";
 
 interface DocumentRow {
@@ -21,10 +21,7 @@ const mapDocumentRow = (row: DocumentRow): RawDocument => ({
   id: row.id,
   title: row.title,
   content: row.content,
-  metadata:
-    typeof row.metadata === "string"
-      ? JSON.parse(row.metadata)
-      : ((row.metadata as Record<string, unknown>) ?? {}),
+  metadata: parseJsonOr(row.metadata, {}),
   tags: row.tags ?? [],
   source: row.source,
   resourceName: row.resource_name,

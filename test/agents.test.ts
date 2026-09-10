@@ -389,6 +389,12 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
             ? Option.some(savedEntities.get(id)!)
             : Option.none(),
         ),
+      findByIds: (ids) =>
+        Effect.sync(() =>
+          ids
+            .map((id) => savedEntities.get(id))
+            .filter((e): e is Entity => e !== undefined),
+        ),
       findByName: (name) =>
         Effect.sync(() => {
           const match = Array.from(savedEntities.values()).find(

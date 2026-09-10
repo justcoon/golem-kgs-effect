@@ -30,19 +30,24 @@ export function sha256Hex(data: string): string {
   return crypto.createHash("sha256").update(data, "utf8").digest("hex");
 }
 
+const tryParseUrl = Option.liftThrowable(
+  (relativeOrAbsolute: string, baseUrl?: string) =>
+    new URL(relativeOrAbsolute, baseUrl),
+);
+
+const tryParseRegex = Option.liftThrowable(
+  (pattern: string) => new RegExp(pattern),
+);
+
 /**
  * Resolves a relative or absolute link against a base URL.
- * Returns undefined if the URL is invalid.
+ * Returns Option.none() if the URL is invalid.
  */
 export function resolveUrl(
   baseUrl: string,
   relativeOrAbsolute: string,
-): string | undefined {
-  try {
-    return new URL(relativeOrAbsolute, baseUrl).toString();
-  } catch {
-    return undefined;
-  }
+): Option.Option<URL> {
+  return tryParseUrl(relativeOrAbsolute, baseUrl);
 }
 
 /**
@@ -173,11 +178,11 @@ export function isUrlAllowed(
   if (excludePatterns && excludePatterns.length > 0) {
     for (const pattern of excludePatterns) {
       if (url.includes(pattern)) return false;
-      try {
-        if (new RegExp(pattern).test(url)) return false;
-      } catch {
-        // pattern was literal string substring
-      }
+      const regexMatched = tryParseRegex(pattern).pipe(
+        Option.filter((re) => re.test(url)),
+        Option.isSome,
+      );
+      if (regexMatched) return false;
     }
   }
 
@@ -188,13 +193,13 @@ export function isUrlAllowed(
         matched = true;
         break;
       }
-      try {
-        if (new RegExp(pattern).test(url)) {
-          matched = true;
-          break;
-        }
-      } catch {
-        // pattern was literal string substring
+      const regexMatched = tryParseRegex(pattern).pipe(
+        Option.filter((re) => re.test(url)),
+        Option.isSome,
+      );
+      if (regexMatched) {
+        matched = true;
+        break;
       }
     }
     return matched;
@@ -231,7 +236,10 @@ export function extractContent(
     ) ||
     body.match(/<link\s+[^>]*href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
   if (canonicalMatch && canonicalMatch[1]) {
-    canonicalUrl = resolveUrl(baseUrl, canonicalMatch[1].trim());
+    canonicalUrl = resolveUrl(baseUrl, canonicalMatch[1].trim()).pipe(
+      Option.map((u) => u.toString()),
+      Option.getOrUndefined,
+    );
   }
 
   if (!canonicalUrl) {
@@ -243,7 +251,10 @@ export function extractContent(
         /<meta\s+[^>]*content=["']([^"']+)["'][^>]*property=["']og:url["']/i,
       );
     if (ogMatch && ogMatch[1]) {
-      canonicalUrl = resolveUrl(baseUrl, ogMatch[1].trim());
+      canonicalUrl = resolveUrl(baseUrl, ogMatch[1].trim()).pipe(
+        Option.map((u) => u.toString()),
+        Option.getOrUndefined,
+      );
     }
   }
 
@@ -251,8 +262,10 @@ export function extractContent(
   const baseMatch = body.match(/<base\s+[^>]*href\s*=\s*["']([^"']+)["']/i);
   let resolvedBaseUrl = baseUrl;
   if (baseMatch && baseMatch[1]) {
-    const resolvedBase = resolveUrl(baseUrl, baseMatch[1].trim());
-    if (resolvedBase) resolvedBaseUrl = resolvedBase;
+    const baseOpt = resolveUrl(baseUrl, baseMatch[1].trim());
+    if (Option.isSome(baseOpt)) {
+      resolvedBaseUrl = baseOpt.value.toString();
+    }
   }
 
   // Extracted links
@@ -270,22 +283,19 @@ export function extractContent(
         !href.startsWith("mailto:") &&
         !href.startsWith("tel:")
       ) {
-        const resolved = resolveUrl(resolvedBaseUrl, href);
-        if (resolved) {
-          try {
-            const parsed = new URL(resolved);
-            if (
+        const validLinkOpt = resolveUrl(resolvedBaseUrl, href).pipe(
+          Option.filter(
+            (parsed) =>
               (parsed.protocol === "http:" || parsed.protocol === "https:") &&
               !/\.(png|jpg|jpeg|gif|svg|webp|ico|pdf|zip|tar|gz|mp3|mp4|css|js)$/i.test(
                 parsed.pathname,
               ) &&
-              isUrlAllowed(resolved, includePatterns, excludePatterns)
-            ) {
-              extractedLinks.push(resolved);
-            }
-          } catch {
-            // Ignore invalid URLs
-          }
+              isUrlAllowed(parsed.toString(), includePatterns, excludePatterns),
+          ),
+          Option.map((parsed) => parsed.toString()),
+        );
+        if (Option.isSome(validLinkOpt)) {
+          extractedLinks.push(validLinkOpt.value);
         }
       }
     }
@@ -391,8 +401,8 @@ export function fetchPageContent(
           );
         }
 
-        const nextUrl = resolveUrl(currentUrl, location);
-        if (!nextUrl) {
+        const nextUrlOpt = resolveUrl(currentUrl, location);
+        if (Option.isNone(nextUrlOpt)) {
           return yield* Effect.fail(
             new ConnectorError({
               connectorId: "web",
@@ -402,7 +412,7 @@ export function fetchPageContent(
           );
         }
 
-        currentUrl = nextUrl;
+        currentUrl = nextUrlOpt.value.toString();
         redirectCount++;
         continue;
       }
@@ -528,12 +538,10 @@ export class WebPageConnector implements SourceConnector<
             ? target.seedUrls
             : [target.baseUrl];
 
-        let baseHost = "";
-        try {
-          baseHost = new URL(target.baseUrl).hostname;
-        } catch {
-          // ignore
-        }
+        const baseHost = tryParseUrl(target.baseUrl).pipe(
+          Option.map((u) => u.hostname),
+          Option.getOrElse(() => ""),
+        );
 
         const maxPages = target.maxPages ?? 100;
         const queue: string[] = [...initialSeeds];
@@ -542,13 +550,8 @@ export class WebPageConnector implements SourceConnector<
         while (queue.length > 0 && discoveredUrls.length < maxPages) {
           const currentUrl = queue.shift()!;
 
-          const fetchOpt = yield* fetchPageContent(
-            currentUrl,
-            httpClient,
-            target.headers,
-          ).pipe(
-            Effect.map((res) => Option.some(res)),
-            Effect.catch(() => Effect.succeed(Option.none())),
+          const fetchOpt = yield* Effect.option(
+            fetchPageContent(currentUrl, httpClient, target.headers),
           );
 
           if (Option.isNone(fetchOpt)) continue;
@@ -587,29 +590,31 @@ export class WebPageConnector implements SourceConnector<
           );
 
           for (const link of content.extractedLinks) {
-            try {
-              const parsed = new URL(link);
-              parsed.hash = "";
-              const normalizedLink = parsed.toString();
+            const parsedOpt = tryParseUrl(link).pipe(
+              Option.map((parsed) => {
+                parsed.hash = "";
+                return {
+                  hostname: parsed.hostname,
+                  normalized: parsed.toString(),
+                };
+              }),
+            );
 
-              if (
-                parsed.hostname === baseHost &&
-                !queuedOrVisited.has(normalizedLink)
-              ) {
+            if (Option.isSome(parsedOpt)) {
+              const { hostname, normalized } = parsedOpt.value;
+              if (hostname === baseHost && !queuedOrVisited.has(normalized)) {
                 if (
                   isUrlAllowed(
-                    normalizedLink,
+                    normalized,
                     target.includePatterns,
                     target.excludePatterns,
                   ) ||
                   isSeed
                 ) {
-                  queuedOrVisited.add(normalizedLink);
-                  queue.push(normalizedLink);
+                  queuedOrVisited.add(normalized);
+                  queue.push(normalized);
                 }
               }
-            } catch {
-              // ignore invalid URLs
             }
           }
         }

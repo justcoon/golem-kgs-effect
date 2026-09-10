@@ -42,14 +42,10 @@ export class ResourcesConfig extends defineConfig(
       return {
         s3: s3Targets,
         web: webTargets,
-        getS3Resource: (name: string): Option.Option<S3ResourceTarget> => {
-          const target = s3Targets[name];
-          return target !== undefined ? Option.some(target) : Option.none();
-        },
-        getWebResource: (name: string): Option.Option<WebResourceTarget> => {
-          const target = webTargets[name];
-          return target !== undefined ? Option.some(target) : Option.none();
-        },
+        getS3Resource: (name: string): Option.Option<S3ResourceTarget> =>
+          Option.fromNullishOr(s3Targets[name]),
+        getWebResource: (name: string): Option.Option<WebResourceTarget> =>
+          Option.fromNullishOr(webTargets[name]),
       };
     }),
   );

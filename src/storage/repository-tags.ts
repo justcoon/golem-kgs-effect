@@ -149,6 +149,9 @@ export interface EntityRepositoryShape {
   readonly findById: (
     id: string,
   ) => Effect.Effect<Option.Option<Entity>, SqlError>;
+  readonly findByIds: (
+    ids: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<Entity>, SqlError>;
   readonly findByName: (
     name: string,
   ) => Effect.Effect<Option.Option<Entity>, SqlError>;

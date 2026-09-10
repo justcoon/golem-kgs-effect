@@ -153,11 +153,16 @@ export class S3Connector implements SourceConnector<
   ): Effect.Effect<ReadonlyArray<DiscoveredItem>, ConnectorError> {
     const { id, prefixes, target, supportedExtensions, httpClient } = this;
     return Effect.gen(function* () {
-      const cursorVal = Option.getOrUndefined(cursor);
-      const lastSyncTime = cursorVal
-        ? new Date(cursorVal.lastSyncTimestamp).getTime()
-        : 0;
-      const processedKeys = cursorVal?.processedKeys ?? {};
+      const { lastSyncTime, processedKeys } = Option.match(cursor, {
+        onNone: () => ({
+          lastSyncTime: 0,
+          processedKeys: {} as Record<string, string>,
+        }),
+        onSome: (c) => ({
+          lastSyncTime: new Date(c.lastSyncTimestamp).getTime(),
+          processedKeys: c.processedKeys,
+        }),
+      });
 
       const discovered: DiscoveredItem[] = [];
       const seenIds = new Set<string>();

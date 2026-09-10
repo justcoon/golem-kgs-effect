@@ -1,6 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Pg } from "@golemcloud/effect-golem/postgres";
+import { Pg, parseJsonOr } from "./database-client.js";
 import {
   type CreateChunkInput,
   type DocumentChunk,
@@ -52,10 +52,7 @@ const mapDocumentRow = (row: DocumentRow): RawDocument => ({
   id: row.id,
   title: row.title,
   content: row.content,
-  metadata:
-    typeof row.metadata === "string"
-      ? JSON.parse(row.metadata)
-      : ((row.metadata as Record<string, unknown>) ?? {}),
+  metadata: parseJsonOr(row.metadata, {}),
   tags: Array.from(row.tags ?? []),
   source: row.source,
   resourceName: row.resource_name,
@@ -72,10 +69,7 @@ const mapChunkRow = (row: ChunkRow): DocumentChunk => ({
   content: row.content,
   tokenCount: row.token_count,
   embedding: row.embedding ? Array.from(row.embedding) : null,
-  metadata:
-    typeof row.metadata === "string"
-      ? JSON.parse(row.metadata)
-      : ((row.metadata as Record<string, unknown>) ?? {}),
+  metadata: parseJsonOr(row.metadata, {}),
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
 });
@@ -245,10 +239,7 @@ ChunkRepository.Default = Layer.effect(
           documentId: r.document_id,
           content: r.content,
           score: Number(r.score),
-          metadata:
-            typeof r.metadata === "string"
-              ? JSON.parse(r.metadata)
-              : ((r.metadata as Record<string, unknown>) ?? {}),
+          metadata: parseJsonOr(r.metadata, {}),
         }));
       });
 
@@ -270,10 +261,7 @@ ChunkRepository.Default = Layer.effect(
           documentId: r.document_id,
           content: r.content,
           score: Number(r.score),
-          metadata:
-            typeof r.metadata === "string"
-              ? JSON.parse(r.metadata)
-              : ((r.metadata as Record<string, unknown>) ?? {}),
+          metadata: parseJsonOr(r.metadata, {}),
         }));
       });
 

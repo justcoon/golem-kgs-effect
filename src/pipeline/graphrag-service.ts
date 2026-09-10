@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { type SqlError } from "effect/unstable/sql/SqlError";
 import { EmbeddingService, type EmbeddingError } from "./embedding-service.js";
 import {
@@ -137,14 +137,7 @@ export class GraphRAGService extends Context.Service<
 
             relationships = neighborhood.edges;
 
-            const entityOptions = yield* Effect.all(
-              neighborhood.entityIds.map((id) => entityRepo.findById(id)),
-              { concurrency: 10 },
-            );
-
-            entities = entityOptions
-              .filter(Option.isSome)
-              .map((opt) => opt.value);
+            entities = yield* entityRepo.findByIds(neighborhood.entityIds);
           }
 
           // 5. Synthesize Markdown context prompt

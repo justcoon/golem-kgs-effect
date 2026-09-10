@@ -86,7 +86,7 @@ export class EntityResolverService extends Context.Service<
                 lastObservedAt: new Date().toISOString(),
               },
             });
-            return Option.isSome(updatedOpt) ? updatedOpt.value : existing;
+            return Option.getOrElse(updatedOpt, () => existing);
           }
 
           // 2. Try finding by Alias
@@ -127,7 +127,7 @@ export class EntityResolverService extends Context.Service<
                 lastObservedAt: new Date().toISOString(),
               },
             });
-            return Option.isSome(updatedOpt) ? updatedOpt.value : existing;
+            return Option.getOrElse(updatedOpt, () => existing);
           }
 
           // 3. No match found, create/upsert new canonical entity

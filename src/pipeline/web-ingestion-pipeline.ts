@@ -70,32 +70,34 @@ export function runWebIngestion(
     let failedCount = 0;
 
     for (const item of discoveredItems) {
-      const itemEffect = Effect.gen(function* () {
-        const { document } = yield* connector.fetch(item);
-        yield* processAndIndexDocument(document);
+      const ok = yield* Effect.match(
+        Effect.gen(function* () {
+          const { document } = yield* connector.fetch(item);
+          yield* processAndIndexDocument(document);
 
-        const meta = (document.metadata ?? {}) as Record<string, unknown>;
-        newProcessedUrls[item.id] = {
-          url: item.id,
-          etag: typeof meta.etag === "string" ? meta.etag : undefined,
-          lastModified:
-            typeof meta.lastModified === "string"
-              ? meta.lastModified
-              : undefined,
-          contentHash:
-            typeof meta.contentHash === "string" ? meta.contentHash : undefined,
-          syncedAt: new Date().toISOString(),
-        };
-      });
-
-      const ok = yield* itemEffect.pipe(
-        Effect.map(() => true),
-        Effect.catch(() => Effect.succeed(false)),
+          const meta = (document.metadata ?? {}) as Record<string, unknown>;
+          newProcessedUrls[item.id] = {
+            url: item.id,
+            etag: typeof meta.etag === "string" ? meta.etag : undefined,
+            lastModified:
+              typeof meta.lastModified === "string"
+                ? meta.lastModified
+                : undefined,
+            contentHash:
+              typeof meta.contentHash === "string"
+                ? meta.contentHash
+                : undefined,
+            syncedAt: new Date().toISOString(),
+          };
+          syncedCount++;
+        }),
+        {
+          onFailure: () => false,
+          onSuccess: () => true,
+        },
       );
 
-      if (ok) {
-        syncedCount++;
-      } else {
+      if (!ok) {
         failedCount++;
       }
     }

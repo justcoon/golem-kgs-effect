@@ -1,6 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Pg } from "@golemcloud/effect-golem/postgres";
+import { Pg, parseJsonOr } from "./database-client.js";
 import {
   type SaveCheckpointInput,
   type SyncCheckpoint,
@@ -18,16 +18,10 @@ interface CheckpointRow {
 
 const mapCheckpointRow = (row: CheckpointRow): SyncCheckpoint => ({
   connectorId: row.connector_id,
-  cursorData:
-    typeof row.cursor_data === "string"
-      ? JSON.parse(row.cursor_data)
-      : ((row.cursor_data as Record<string, unknown>) ?? {}),
+  cursorData: parseJsonOr(row.cursor_data, {}),
   lastSyncTime: new Date(row.last_sync_time),
   status: row.status as SyncStatus,
-  metrics:
-    typeof row.metrics === "string"
-      ? JSON.parse(row.metrics)
-      : ((row.metrics as Record<string, unknown>) ?? {}),
+  metrics: parseJsonOr(row.metrics, {}),
   updatedAt: new Date(row.updated_at),
 });
 

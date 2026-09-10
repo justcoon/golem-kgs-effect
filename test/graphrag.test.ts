@@ -561,6 +561,12 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
             ? Option.some(mockEntities.get(id)!)
             : Option.none(),
         ),
+      findByIds: (ids) =>
+        Effect.sync(() =>
+          ids
+            .map((id) => mockEntities.get(id))
+            .filter((e): e is Entity => e !== undefined),
+        ),
       findByName: (name) =>
         Effect.sync(() => {
           const found = Array.from(mockEntities.values()).find(
