@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Effect, Option, Schema } from "effect";
-import { HttpClient } from "effect/unstable/http";
+import { Effect, Option, Schema, Stream } from "effect";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import {
   extractContent,
   extractMarkdownFromHtml,
@@ -408,7 +408,7 @@ describe("Web Connector & Ingestion Subsystem", () => {
             url: "https://learn.golem.cloud/docs/intro",
             etag: '"abc-123"',
             lastModified: "2026-09-01T00:00:00Z",
-            contentHash: "sha256:hash1",
+            syncedAt: "2026-09-09T18:00:00.000Z",
           },
         ],
         cursor: null,
@@ -454,8 +454,6 @@ describe("Web Connector & Ingestion Subsystem", () => {
 
     it("should decode WebProcessedUrlEntrySchema and WebTaskMetricsSchema", () => {
       const urlEntry = {
-        url: "https://learn.golem.cloud/docs",
-        contentHash: "abc123hash",
         etag: '"etag-1"',
         lastModified: "Wed, 21 Oct 2025 07:28:00 GMT",
         syncedAt: "2026-09-09T18:00:00.000Z",
@@ -463,8 +461,9 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const decodedEntry = Schema.decodeUnknownSync(WebProcessedUrlEntrySchema)(
         urlEntry,
       );
-      assert.equal(decodedEntry.url, "https://learn.golem.cloud/docs");
-      assert.equal(decodedEntry.contentHash, "abc123hash");
+      assert.equal(decodedEntry.etag, '"etag-1"');
+      assert.equal(decodedEntry.lastModified, "Wed, 21 Oct 2025 07:28:00 GMT");
+      assert.equal(decodedEntry.syncedAt, "2026-09-09T18:00:00.000Z");
 
       const metrics = {
         totalDiscovered: 42,
@@ -516,11 +515,15 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const mockClient = HttpClient.make((req) => {
         const body = mockHtml[req.url] ?? "<html><body>Not Found</body></html>";
         const status = mockHtml[req.url] ? 200 : 404;
-        return Effect.succeed({
-          status,
-          headers: { "content-type": "text/html" },
-          text: Effect.succeed(body),
-        } as any);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(body, {
+              status,
+              headers: { "content-type": "text/html" },
+            }),
+          ),
+        );
       });
 
       const connector = new WebPageConnector(
@@ -545,10 +548,216 @@ describe("Web Connector & Ingestion Subsystem", () => {
       assert.ok(!urls.includes("https://external.com/docs"));
       assert.equal(items.length, 5);
 
-      // Verify cached fetch returns content without throwing
+      // Verify fetch returns content without throwing
       const doc = await Effect.runPromise(connector.fetch(items[1]!));
       assert.equal(doc.document.title, "Develop on Golem");
       assert.ok(doc.document.content.includes("Develop on Golem"));
+    });
+
+    it("should crawl on the fly emitting documents and extracting links without retaining bodies in cache", async () => {
+      let httpRequestsCount = 0;
+      const htmlMap: Record<string, string> = {
+        "https://example.com": `
+          <html><head><title>Root Page</title></head>
+          <body><a href="/docs/page1">Doc 1</a></body></html>
+        `,
+        "https://example.com/docs/page1": `
+          <html><head><title>Page One</title></head>
+          <body><p>Content of page 1</p></body></html>
+        `,
+      };
+
+      const mockClient = HttpClient.make((req) => {
+        httpRequestsCount++;
+        const body = htmlMap[req.url] ?? "<html><body>404</body></html>";
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(body, {
+              status: 200,
+              headers: {
+                "content-type": "text/html",
+                etag: `"etag-${req.url}"`,
+              },
+            }),
+          ),
+        );
+      });
+
+      const connector = await Effect.runPromise(
+        WebPageConnector.make(
+          {
+            name: "test-crawl",
+            baseUrl: "https://example.com",
+            seedUrls: ["https://example.com"],
+            includePatterns: ["/docs/"],
+          },
+          mockClient,
+        ),
+      );
+
+      const receivedDocs: string[] = [];
+      const stats = await Effect.runPromise(
+        connector.crawlOnTheFly(Option.none(), (event) =>
+          Effect.sync(() => {
+            if (Option.isSome(event.document)) {
+              receivedDocs.push(event.document.value.title);
+            }
+          }),
+        ),
+      );
+
+      assert.equal(stats.discovered, 2);
+      assert.equal(stats.synced, 2);
+      assert.equal(stats.failed, 0);
+      assert.equal(httpRequestsCount, 2);
+      assert.ok(receivedDocs.includes("Root Page"));
+      assert.ok(receivedDocs.includes("Page One"));
+    });
+
+    it("should handle HTTP 304 Not Modified and skip document body processing when cursor is fresh", async () => {
+      let headOrGetCalls = 0;
+      const mockClient = HttpClient.make((req) => {
+        headOrGetCalls++;
+        const ifNoneMatch = req.headers["if-none-match"];
+        if (ifNoneMatch === `"existing-etag"`) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              req,
+              new Response(null, {
+                status: 304,
+                headers: { etag: `"existing-etag"` },
+              }),
+            ),
+          );
+        }
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Fresh</title></head><body>body</body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html", etag: `"new-etag"` },
+              },
+            ),
+          ),
+        );
+      });
+
+      const connector = new WebPageConnector(
+        {
+          name: "test-304",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com"],
+        },
+        mockClient,
+      );
+
+      const events: Array<{ notModified: boolean; hasDoc: boolean }> = [];
+      const cursor = Option.some({
+        lastSyncTimestamp: "2026-09-01T00:00:00Z",
+        processedUrls: {
+          "https://example.com": {
+            url: "https://example.com",
+            etag: `"existing-etag"`,
+            syncedAt: "2026-09-01T00:00:00Z",
+          },
+        },
+      });
+
+      const stats = await Effect.runPromise(
+        connector.crawlOnTheFly(cursor, (event) =>
+          Effect.sync(() => {
+            events.push({
+              notModified: event.notModified,
+              hasDoc: Option.isSome(event.document),
+            });
+          }),
+        ),
+      );
+
+      assert.equal(stats.discovered, 1);
+      assert.equal(stats.synced, 1);
+      assert.equal(headOrGetCalls, 1);
+      assert.equal(events.length, 1);
+      assert.equal(events[0]?.notModified, true);
+      assert.equal(events[0]?.hasDoc, false);
+    });
+
+    it("should emit CrawledPageEvents via crawlStream and collect them via Stream.runCollect", async () => {
+      const mockClient = HttpClient.make((req) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Streamed Page</title></head><body><p>Hello Stream</p></body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html", etag: `"etag-1"` },
+              },
+            ),
+          ),
+        ),
+      );
+
+      const connector = new WebPageConnector(
+        {
+          name: "test-stream",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com"],
+        },
+        mockClient,
+      );
+
+      const eventsChunk = await Effect.runPromise(
+        Stream.runCollect(connector.crawlStream()),
+      );
+      const events = Array.from(eventsChunk);
+
+      assert.equal(events.length, 1);
+      assert.equal(events[0]?.url, "https://example.com");
+      assert.equal(events[0]?.notModified, false);
+      assert.ok(Option.isSome(events[0]?.document));
+      assert.equal(events[0]?.document.value.title, "Streamed Page");
+      assert.equal(events[0]?.etag, `"etag-1"`);
+    });
+
+    it("should account for page failures accurately in crawlOnTheFly without phantom synced increments", async () => {
+      const mockClient = HttpClient.make((req) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Fail Test</title></head><body><p>Text</p></body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              },
+            ),
+          ),
+        ),
+      );
+
+      const connector = new WebPageConnector(
+        {
+          name: "test-fail",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com"],
+        },
+        mockClient,
+      );
+
+      // onPage fails with an error
+      const stats = await Effect.runPromise(
+        connector.crawlOnTheFly(Option.none(), () =>
+          Effect.fail(new Error("Database indexing failed")),
+        ),
+      );
+
+      assert.equal(stats.discovered, 1);
+      assert.equal(stats.synced, 0); // Must NOT be incremented
+      assert.equal(stats.failed, 1); // Must be incremented
     });
   });
 });

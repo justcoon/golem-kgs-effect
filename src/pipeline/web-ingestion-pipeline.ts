@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect";
+import { Effect, HashMap, Option, Ref, Stream } from "effect";
 import {
   type WebProcessedUrlEntry,
   type WebTaskMetrics,
@@ -60,61 +60,121 @@ export function runWebIngestion(
             processedUrls: currentState.processedUrls,
           });
 
-    const discoveredItems = yield* connector.discover(cursorData);
+    const processedRef = yield* Ref.make<
+      HashMap.HashMap<string, WebProcessedUrlEntry>
+    >(
+      force
+        ? HashMap.empty()
+        : HashMap.fromIterable(Object.entries(currentState.processedUrls)),
+    );
 
-    const newProcessedUrls: Record<string, WebProcessedUrlEntry> = force
-      ? {}
-      : { ...currentState.processedUrls };
+    const discoveredCountRef = yield* Ref.make(0);
+    const syncedCountRef = yield* Ref.make(0);
+    const failedCountRef = yield* Ref.make(0);
 
-    let syncedCount = 0;
-    let failedCount = 0;
-
-    for (const item of discoveredItems) {
-      const ok = yield* Effect.match(
+    yield* connector.crawlStream(cursorData).pipe(
+      Stream.runForEach((event) =>
         Effect.gen(function* () {
-          const { document } = yield* connector.fetch(item);
-          yield* processAndIndexDocument(document);
+          yield* Ref.update(discoveredCountRef, (n) => n + 1);
 
-          const meta = (document.metadata ?? {}) as Record<string, unknown>;
-          newProcessedUrls[item.id] = {
-            url: item.id,
-            etag: typeof meta.etag === "string" ? meta.etag : undefined,
-            lastModified:
-              typeof meta.lastModified === "string"
-                ? meta.lastModified
-                : undefined,
-            contentHash:
-              typeof meta.contentHash === "string"
-                ? meta.contentHash
-                : undefined,
-            syncedAt: new Date().toISOString(),
-          };
-          syncedCount++;
+          if (event.notModified) {
+            yield* Ref.update(processedRef, (map) =>
+              HashMap.modifyAt(
+                map,
+                event.finalUrl,
+                Option.map((entry) => ({
+                  ...entry,
+                  syncedAt: new Date().toISOString(),
+                })),
+              ),
+            );
+            yield* Ref.update(syncedCountRef, (n) => n + 1);
+            return;
+          }
+
+          if (Option.isSome(event.document)) {
+            const document = event.document.value;
+            yield* processAndIndexDocument(document);
+
+            const meta = (document.metadata ?? {}) as Record<string, unknown>;
+            const entry: WebProcessedUrlEntry = {
+              etag: typeof meta.etag === "string" ? meta.etag : event.etag,
+              lastModified:
+                typeof meta.lastModified === "string"
+                  ? meta.lastModified
+                  : event.lastModified,
+              syncedAt: new Date().toISOString(),
+            };
+            yield* Ref.update(processedRef, (map) =>
+              HashMap.set(map, event.finalUrl, entry),
+            );
+            const syncedCount = yield* Ref.updateAndGet(
+              syncedCountRef,
+              (n) => n + 1,
+            );
+
+            // Progressive checkpointing every 10 pages
+            if (syncedCount % 10 === 0) {
+              const currentProcessed = yield* Ref.get(processedRef);
+              const failedCount = yield* Ref.get(failedCountRef);
+              yield* checkpointRepo
+                .saveCheckpoint({
+                  connectorId: `web_${resourceName}`,
+                  cursorData: {
+                    lastSyncTimestamp: new Date().toISOString(),
+                    processedUrls: Object.fromEntries(currentProcessed),
+                  },
+                  status: "RUNNING",
+                  metrics: {
+                    synced: syncedCount,
+                    failed: failedCount,
+                    durationMs: Date.now() - startTime,
+                  },
+                })
+                .pipe(Effect.ignore);
+            }
+          }
+        }).pipe(
+          Effect.catch((err: unknown) =>
+            Effect.gen(function* () {
+              yield* Ref.update(failedCountRef, (n) => n + 1);
+              yield* Effect.logWarning(
+                `Failed to process document for ${event.finalUrl}: ${String(err)}`,
+              );
+            }),
+          ),
+        ),
+      ),
+      Effect.catch((err) =>
+        Effect.gen(function* () {
+          yield* Ref.update(failedCountRef, (n) => n + 1);
+          yield* Effect.logWarning(
+            `Crawl stream error for resource ${resourceName}: ${String(err)}`,
+          );
         }),
-        {
-          onFailure: () => false,
-          onSuccess: () => true,
-        },
-      );
-
-      if (!ok) {
-        failedCount++;
-      }
-    }
+      ),
+    );
 
     const duration = Date.now() - startTime;
     const nowIso = new Date().toISOString();
+
+    const finalProcessed = yield* Ref.get(processedRef);
+    const finalProcessedUrls: Record<string, WebProcessedUrlEntry> =
+      Object.fromEntries(finalProcessed);
+    const discoveredCount = yield* Ref.get(discoveredCountRef);
+    const syncedCount = yield* Ref.get(syncedCountRef);
+    const failedCount = yield* Ref.get(failedCountRef);
 
     yield* checkpointRepo
       .saveCheckpoint({
         connectorId: `web_${resourceName}`,
         cursorData: {
           lastSyncTimestamp: nowIso,
-          processedUrls: newProcessedUrls,
+          processedUrls: finalProcessedUrls,
         },
         status: failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED",
         metrics: {
-          discovered: discoveredItems.length,
+          discovered: discoveredCount,
           synced: syncedCount,
           failed: failedCount,
           durationMs: duration,
@@ -132,11 +192,10 @@ export function runWebIngestion(
     return {
       status,
       lastSyncTimestamp: nowIso,
-      processedUrls: newProcessedUrls,
+      processedUrls: finalProcessedUrls,
       cursor: null,
       metrics: {
-        totalDiscovered:
-          currentState.metrics.totalDiscovered + discoveredItems.length,
+        totalDiscovered: currentState.metrics.totalDiscovered + discoveredCount,
         totalSynced: currentState.metrics.totalSynced + syncedCount,
         totalFailed: currentState.metrics.totalFailed + failedCount,
         lastDurationMs: duration,

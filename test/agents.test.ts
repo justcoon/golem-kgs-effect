@@ -357,9 +357,11 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       count: () => Effect.sync(() => savedChunks.length),
     };
 
+    const checkpointHistory: SaveCheckpointInput[] = [];
     const mockCheckpointRepo: CheckpointRepositoryShape = {
       saveCheckpoint: (input: SaveCheckpointInput) =>
         Effect.sync(() => {
+          checkpointHistory.push(input);
           const cp: SyncCheckpoint = {
             connectorId: input.connectorId,
             cursorData: input.cursorData as Record<string, unknown>,
@@ -660,6 +662,77 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       // Force causes re-discovery of all 2 prefix items
       assert.equal(result.metrics.totalDiscovered, 4); // 2 previous + 2 new
       assert.equal(result.metrics.totalSynced, 4);
+    });
+
+    it("should perform progressive checkpointing every 10 documents during S3 ingestion", async () => {
+      const manyFiles: Record<string, { content: string; etag: string }> = {};
+      for (let i = 1; i <= 15; i++) {
+        const num = String(i).padStart(2, "0");
+        manyFiles[`rfcs/rfc-${num}.md`] = {
+          content: `# RFC ${num}\nContent for document ${num}.`,
+          etag: `etag_${num}`,
+        };
+      }
+
+      const layersWithManyFiles = Layer.mergeAll(
+        Layer.succeed(DocumentRepository, mockDocRepo),
+        Layer.succeed(ChunkRepository, mockChunkRepo),
+        Layer.succeed(CheckpointRepository, mockCheckpointRepo),
+        Layer.succeed(EntityRepository, mockEntityRepo),
+        Layer.succeed(GraphRepository, mockGraphRepo),
+        EntityResolverService.Default.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.succeed(EntityRepository, mockEntityRepo),
+              Layer.succeed(GraphRepository, mockGraphRepo),
+            ),
+          ),
+        ),
+        EmbeddingService.Mock,
+        ExtractionService.Default,
+        S3ConnectorService.Mock(manyFiles, {
+          main: { prefixes: ["rfcs/"] },
+        }),
+      );
+
+      checkpointHistory.length = 0;
+
+      const state: S3TaskState = {
+        resourceName: "main",
+        status: "IDLE",
+        lastSyncTimestamp: null,
+        processedKeys: {},
+        cursor: null,
+        metrics: {
+          totalDiscovered: 0,
+          totalSynced: 0,
+          totalFailed: 0,
+          lastDurationMs: 0,
+        },
+        errorMessage: null,
+      };
+
+      const result = await Effect.runPromise(
+        runS3Ingestion("main", state).pipe(Effect.provide(layersWithManyFiles)),
+      );
+
+      assert.equal(result.status, "COMPLETED");
+      assert.equal(result.metrics.totalSynced, 15);
+
+      // Check checkpoint history: 1 intermediate progressive checkpoint (at 10 items) with "RUNNING" status, plus 1 final checkpoint with "COMPLETED"
+      assert.ok(checkpointHistory.length >= 2);
+      const intermediate = checkpointHistory.find(
+        (c) => c.status === "RUNNING",
+      );
+      assert.ok(
+        intermediate,
+        "Should have emitted a RUNNING progressive checkpoint",
+      );
+      assert.equal((intermediate.metrics as { synced: number }).synced, 10);
+      assert.equal(
+        checkpointHistory[checkpointHistory.length - 1].status,
+        "COMPLETED",
+      );
     });
   });
 

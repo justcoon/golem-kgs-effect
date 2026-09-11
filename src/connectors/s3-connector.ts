@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Stream } from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -80,11 +80,17 @@ function hasSupportedExtension(
   return extensions.some((ext) => lower.endsWith(ext.toLowerCase()));
 }
 
-export class S3Connector implements SourceConnector<
+export interface S3ConnectorInstance extends SourceConnector<
   S3ResourceTarget,
   S3CursorData,
   DiscoveredItem
 > {
+  readonly discoverStream: (
+    cursor: Option.Option<S3CursorData>,
+  ) => Stream.Stream<DiscoveredItem, ConnectorError>;
+}
+
+export class S3Connector implements S3ConnectorInstance {
   readonly id: string;
   readonly source = "s3";
   readonly target: S3ResourceTarget;
@@ -145,129 +151,151 @@ export class S3Connector implements SourceConnector<
     );
   }
 
+  discoverStream(
+    cursor: Option.Option<S3CursorData>,
+  ): Stream.Stream<DiscoveredItem, ConnectorError> {
+    const { id, prefixes, target, supportedExtensions, httpClient } = this;
+    const { lastSyncTime, processedKeys } = Option.match(cursor, {
+      onNone: () => ({
+        lastSyncTime: 0,
+        processedKeys: {} as Record<string, string>,
+      }),
+      onSome: (c) => ({
+        lastSyncTime: new Date(c.lastSyncTimestamp).getTime(),
+        processedKeys: c.processedKeys,
+      }),
+    });
+
+    interface PaginateState {
+      readonly prefixIndex: number;
+      readonly continuationToken?: string;
+      readonly seenIds: ReadonlySet<string>;
+    }
+
+    const initialState: PaginateState = {
+      prefixIndex: 0,
+      continuationToken: undefined,
+      seenIds: new Set<string>(),
+    };
+
+    return Stream.paginate(initialState, (state) =>
+      Effect.gen(function* () {
+        if (state.prefixIndex >= prefixes.length) {
+          return [[], Option.none<PaginateState>()] as const;
+        }
+
+        const scanPrefix = prefixes[state.prefixIndex] ?? "";
+        const queryParams: Record<string, string> = {
+          "list-type": "2",
+          "max-keys": "1000",
+        };
+        if (scanPrefix.length > 0) {
+          queryParams["prefix"] = scanPrefix;
+        }
+        if (state.continuationToken) {
+          queryParams["continuation-token"] = state.continuationToken;
+        }
+
+        const url = buildS3Url(target.endpoint, target.bucket, "", queryParams);
+
+        const headers = toSafeRequestHeaders(
+          signS3Request({
+            method: "GET",
+            url,
+            region: target.region,
+            accessKeyId: target.accessKeyId,
+            secretAccessKey: target.secretAccessKey,
+          }),
+        );
+
+        const request = HttpClientRequest.get(url.toString()).pipe(
+          HttpClientRequest.setHeaders(headers),
+        );
+
+        const response = yield* httpClient.execute(request).pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.mapError(
+            (err) =>
+              new ConnectorError({
+                connectorId: id,
+                message: `Failed to list objects in bucket '${target.bucket}': ${String(err)}`,
+                cause: err,
+              }),
+          ),
+        );
+
+        const xmlText = yield* response.text.pipe(
+          Effect.mapError(
+            (err) =>
+              new ConnectorError({
+                connectorId: id,
+                message: `Failed to read ListObjectsV2 response body: ${String(err)}`,
+                cause: err,
+              }),
+          ),
+        );
+
+        const parsed = parseListBucketResultXml(xmlText);
+        const nextSeen = new Set(state.seenIds);
+        const items: DiscoveredItem[] = [];
+
+        for (const obj of parsed.objects) {
+          if (nextSeen.has(obj.key)) {
+            continue;
+          }
+          if (!hasSupportedExtension(obj.key, supportedExtensions)) {
+            continue;
+          }
+
+          const objTime = obj.lastModified.getTime();
+          const knownEtag = processedKeys[obj.key];
+
+          // Incremental check: skip if timestamp <= lastSyncTime AND etag matches
+          if (knownEtag && knownEtag === obj.etag && objTime <= lastSyncTime) {
+            continue;
+          }
+
+          nextSeen.add(obj.key);
+          items.push({
+            id: obj.key,
+            uri: `s3://${target.bucket}/${obj.key}`,
+            sizeBytes: obj.size,
+            eTag: obj.etag,
+            lastModified: obj.lastModified,
+            metadata: {
+              bucket: target.bucket,
+              region: target.region,
+              endpoint: target.endpoint,
+            },
+          });
+        }
+
+        let nextState: Option.Option<PaginateState>;
+        if (parsed.isTruncated && parsed.nextContinuationToken) {
+          nextState = Option.some({
+            prefixIndex: state.prefixIndex,
+            continuationToken: parsed.nextContinuationToken,
+            seenIds: nextSeen,
+          });
+        } else if (state.prefixIndex + 1 < prefixes.length) {
+          nextState = Option.some({
+            prefixIndex: state.prefixIndex + 1,
+            continuationToken: undefined,
+            seenIds: nextSeen,
+          });
+        } else {
+          nextState = Option.none();
+        }
+
+        return [items, nextState] as const;
+      }),
+    );
+  }
+
   discover(
     cursor: Option.Option<S3CursorData>,
   ): Effect.Effect<ReadonlyArray<DiscoveredItem>, ConnectorError> {
-    const { id, prefixes, target, supportedExtensions, httpClient } = this;
-    return Effect.gen(function* () {
-      const { lastSyncTime, processedKeys } = Option.match(cursor, {
-        onNone: () => ({
-          lastSyncTime: 0,
-          processedKeys: {} as Record<string, string>,
-        }),
-        onSome: (c) => ({
-          lastSyncTime: new Date(c.lastSyncTimestamp).getTime(),
-          processedKeys: c.processedKeys,
-        }),
-      });
-
-      const discovered: DiscoveredItem[] = [];
-      const seenIds = new Set<string>();
-
-      for (const scanPrefix of prefixes) {
-        let isTruncated = true;
-        let continuationToken: string | undefined = undefined;
-
-        while (isTruncated) {
-          const queryParams: Record<string, string> = {
-            "list-type": "2",
-            "max-keys": "1000",
-          };
-          if (scanPrefix.length > 0) {
-            queryParams["prefix"] = scanPrefix;
-          }
-          if (continuationToken) {
-            queryParams["continuation-token"] = continuationToken;
-          }
-
-          const url = buildS3Url(
-            target.endpoint,
-            target.bucket,
-            "",
-            queryParams,
-          );
-
-          const headers = toSafeRequestHeaders(
-            signS3Request({
-              method: "GET",
-              url,
-              region: target.region,
-              accessKeyId: target.accessKeyId,
-              secretAccessKey: target.secretAccessKey,
-            }),
-          );
-
-          const request = HttpClientRequest.get(url.toString()).pipe(
-            HttpClientRequest.setHeaders(headers),
-          );
-
-          const response = yield* httpClient.execute(request).pipe(
-            Effect.flatMap(HttpClientResponse.filterStatusOk),
-            Effect.mapError(
-              (err) =>
-                new ConnectorError({
-                  connectorId: id,
-                  message: `Failed to list objects in bucket '${target.bucket}': ${String(err)}`,
-                  cause: err,
-                }),
-            ),
-          );
-
-          const xmlText = yield* response.text.pipe(
-            Effect.mapError(
-              (err) =>
-                new ConnectorError({
-                  connectorId: id,
-                  message: `Failed to read ListObjectsV2 response body: ${String(err)}`,
-                  cause: err,
-                }),
-            ),
-          );
-
-          const parsed = parseListBucketResultXml(xmlText);
-
-          for (const obj of parsed.objects) {
-            if (seenIds.has(obj.key)) {
-              continue;
-            }
-            if (!hasSupportedExtension(obj.key, supportedExtensions)) {
-              continue;
-            }
-
-            const objTime = obj.lastModified.getTime();
-            const knownEtag = processedKeys[obj.key];
-
-            // Incremental check: skip if timestamp <= lastSyncTime AND etag matches
-            if (
-              knownEtag &&
-              knownEtag === obj.etag &&
-              objTime <= lastSyncTime
-            ) {
-              continue;
-            }
-
-            seenIds.add(obj.key);
-            discovered.push({
-              id: obj.key,
-              uri: `s3://${target.bucket}/${obj.key}`,
-              sizeBytes: obj.size,
-              eTag: obj.etag,
-              lastModified: obj.lastModified,
-              metadata: {
-                bucket: target.bucket,
-                region: target.region,
-                endpoint: target.endpoint,
-              },
-            });
-          }
-
-          isTruncated = parsed.isTruncated;
-          continuationToken = parsed.nextContinuationToken;
-        }
-      }
-
-      return discovered;
-    });
+    return Stream.runCollect(this.discoverStream(cursor));
   }
 
   fetch(
@@ -375,10 +403,7 @@ export interface S3ConnectorServiceShape {
   readonly createConnector: (
     targetOrName: S3ResourceTarget | string,
     prefixOrPrefixes?: string | ReadonlyArray<string>,
-  ) => Effect.Effect<
-    SourceConnector<S3ResourceTarget, S3CursorData, DiscoveredItem>,
-    ConnectorError
-  >;
+  ) => Effect.Effect<S3ConnectorInstance, ConnectorError>;
 }
 
 export class S3ConnectorService extends Context.Service<
@@ -461,6 +486,52 @@ export class S3ConnectorService extends Context.Service<
               ? resourceTarget.prefixes
               : [""];
 
+        const mockDiscover = (cursor: Option.Option<S3CursorData>) =>
+          Effect.sync(() => {
+            const cursorVal = Option.getOrUndefined(cursor);
+            const lastSyncTime = cursorVal
+              ? new Date(cursorVal.lastSyncTimestamp).getTime()
+              : 0;
+            const processedKeys = cursorVal?.processedKeys ?? {};
+
+            const bucketName =
+              typeof targetOrName === "string"
+                ? targetOrName
+                : targetOrName.bucket;
+
+            const items: DiscoveredItem[] = [];
+
+            for (const [key, entry] of Object.entries(mockFiles)) {
+              const matchesPrefix =
+                scanPrefixes.length === 0 ||
+                scanPrefixes.some((p) => p.length === 0 || key.startsWith(p));
+              if (!matchesPrefix) {
+                continue;
+              }
+              const lm = entry.lastModified ?? new Date(0);
+              const etag = entry.etag ?? `mock_etag_${key}`;
+
+              if (
+                processedKeys[key] &&
+                processedKeys[key] === etag &&
+                lm.getTime() <= lastSyncTime
+              ) {
+                continue;
+              }
+
+              items.push({
+                id: key,
+                uri: `s3://${bucketName}/${key}`,
+                sizeBytes: Buffer.byteLength(entry.content, "utf8"),
+                eTag: etag,
+                lastModified: lm,
+                metadata: { bucket: bucketName, key },
+              });
+            }
+
+            return items;
+          });
+
         return Effect.succeed({
           id:
             typeof targetOrName === "string"
@@ -468,51 +539,9 @@ export class S3ConnectorService extends Context.Service<
               : `mock_s3_${targetOrName.bucket}`,
           source: "s3",
           connect: () => Effect.void,
-          discover: (cursor: Option.Option<S3CursorData>) =>
-            Effect.sync(() => {
-              const cursorVal = Option.getOrUndefined(cursor);
-              const lastSyncTime = cursorVal
-                ? new Date(cursorVal.lastSyncTimestamp).getTime()
-                : 0;
-              const processedKeys = cursorVal?.processedKeys ?? {};
-
-              const bucketName =
-                typeof targetOrName === "string"
-                  ? targetOrName
-                  : targetOrName.bucket;
-
-              const items: DiscoveredItem[] = [];
-
-              for (const [key, entry] of Object.entries(mockFiles)) {
-                const matchesPrefix =
-                  scanPrefixes.length === 0 ||
-                  scanPrefixes.some((p) => p.length === 0 || key.startsWith(p));
-                if (!matchesPrefix) {
-                  continue;
-                }
-                const lm = entry.lastModified ?? new Date(0);
-                const etag = entry.etag ?? `mock_etag_${key}`;
-
-                if (
-                  processedKeys[key] &&
-                  processedKeys[key] === etag &&
-                  lm.getTime() <= lastSyncTime
-                ) {
-                  continue;
-                }
-
-                items.push({
-                  id: key,
-                  uri: `s3://${bucketName}/${key}`,
-                  sizeBytes: Buffer.byteLength(entry.content, "utf8"),
-                  eTag: etag,
-                  lastModified: lm,
-                  metadata: { bucket: bucketName, key },
-                });
-              }
-
-              return items;
-            }),
+          discover: mockDiscover,
+          discoverStream: (cursor: Option.Option<S3CursorData>) =>
+            Stream.fromIterableEffect(mockDiscover(cursor)),
           fetch: (item: DiscoveredItem) =>
             Effect.gen(function* () {
               const entry = mockFiles[item.id];

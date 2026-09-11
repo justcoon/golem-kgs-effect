@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import {
   ConnectorError,
@@ -8,6 +8,7 @@ import {
   type ExtractedDocument,
   type SourceConnector,
   type WebCursorData,
+  type WebProcessedUrlEntry,
 } from "./connector-base.js";
 import {
   type WebResourceTarget,
@@ -51,13 +52,16 @@ export function resolveUrl(
   return tryParseUrl(relativeOrAbsolute, baseUrl);
 }
 
+export interface SitemapEntry {
+  readonly loc: string;
+  readonly lastmod?: string;
+}
+
 /**
  * Lightweight XML parser for standard sitemap.xml files.
  * Extracts `<url><loc>...</loc><lastmod>...</lastmod></url>` entries.
  */
-export function parseSitemapXml(
-  xmlText: string,
-): ReadonlyArray<{ loc: string; lastmod?: string }> {
+export function parseSitemapXml(xmlText: string): ReadonlyArray<SitemapEntry> {
   const results: Array<{ loc: string; lastmod?: string }> = [];
 
   // Match url entries in <urlset>
@@ -508,27 +512,36 @@ export function extractContent(
 }
 
 /**
+ * Conditional request headers for HTTP caching and validation.
+ */
+export interface ConditionalHeaders {
+  readonly ifNoneMatch?: string;
+  readonly ifModifiedSince?: string;
+}
+
+export interface PageResponse {
+  readonly body: string;
+  readonly finalUrl: string;
+  readonly status: number;
+  readonly etag?: string;
+  readonly lastModified?: string;
+  readonly notModified?: boolean;
+}
+
+/**
  * Fetches page content following HTTP 3xx redirects (up to 5 hops).
- * (Adapted from https://github.com/justcoon/golem-web-crawler-effect/blob/main/src/fetcher-agent.ts)
+ * Supports conditional request headers and handles HTTP 304 Not Modified.
  */
 export function fetchPageContent(
   targetUrl: string,
   httpClient: HttpClient.HttpClient,
   customHeaders?: ReadonlyArray<HttpHeader> | Record<string, string>,
-): Effect.Effect<
-  {
-    body: string;
-    finalUrl: string;
-    status: number;
-    etag?: string;
-    lastModified?: string;
-  },
-  ConnectorError
-> {
+  conditionalHeaders?: ConditionalHeaders,
+  maxRedirects: number = 5,
+): Effect.Effect<PageResponse, ConnectorError> {
   return Effect.gen(function* () {
     let currentUrl = targetUrl;
     let redirectCount = 0;
-    const maxRedirects = 5;
     let status = 0;
     let body = "";
     let finalUrl = targetUrl;
@@ -559,6 +572,19 @@ export function fetchPageContent(
         }
       }
 
+      if (conditionalHeaders?.ifNoneMatch) {
+        request = HttpClientRequest.setHeader(
+          "If-None-Match",
+          conditionalHeaders.ifNoneMatch,
+        )(request);
+      }
+      if (conditionalHeaders?.ifModifiedSince) {
+        request = HttpClientRequest.setHeader(
+          "If-Modified-Since",
+          conditionalHeaders.ifModifiedSince,
+        )(request);
+      }
+
       const response = yield* HttpClient.execute(request).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.mapError(
@@ -574,6 +600,18 @@ export function fetchPageContent(
       status = response.status;
       etag = response.headers["etag"];
       lastModified = response.headers["last-modified"];
+
+      // Handle HTTP 304 Not Modified
+      if (status === 304) {
+        return {
+          body: "",
+          finalUrl: currentUrl,
+          status: 304,
+          etag,
+          lastModified,
+          notModified: true,
+        };
+      }
 
       if (status >= 300 && status <= 399) {
         if (redirectCount >= maxRedirects) {
@@ -638,8 +676,328 @@ export function fetchPageContent(
       break;
     }
 
-    return { body, finalUrl, status, etag, lastModified };
+    return { body, finalUrl, status, etag, lastModified, notModified: false };
   });
+}
+
+/**
+ * Helper to extract markdown, clean chrome, and construct a RawDocument domain model.
+ */
+function buildRawDocument(
+  target: WebResourceTarget,
+  finalUrl: string,
+  originalUrl: string,
+  body: string,
+  status: number,
+  etag?: string,
+  lastModified?: string,
+): { document: RawDocument; outboundLinks: ReadonlyArray<string> } {
+  const content = extractContent(
+    finalUrl,
+    body,
+    target.includePatterns,
+    target.excludePatterns,
+  );
+
+  const docUuid = generateDocumentUuid("web", target.name, finalUrl);
+  const text =
+    content.extractedText.length > 0 ? content.extractedText : content.title;
+  const sizeBytes = Buffer.byteLength(text, "utf8");
+
+  const domain = tryParseUrl(finalUrl).pipe(
+    Option.map((u) => u.hostname),
+    Option.getOrElse(() => ""),
+  );
+
+  const doc: RawDocument = {
+    id: docUuid,
+    title: content.title || finalUrl,
+    content: text,
+    source: "web",
+    resourceName: target.name,
+    sourceKey: finalUrl,
+    sizeBytes,
+    metadata: {
+      url: finalUrl,
+      originalUrl,
+      domain,
+      canonicalUrl: content.canonicalUrl,
+      httpStatus: status,
+      etag,
+      lastModified,
+      contentHash: sha256Hex(text),
+    },
+    tags: ["web", target.name],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  return { document: doc, outboundLinks: content.extractedLinks };
+}
+
+/**
+ * Event emitted per page during on-the-fly streaming crawl.
+ */
+export interface CrawledPageEvent {
+  readonly url: string;
+  readonly finalUrl: string;
+  readonly notModified: boolean;
+  readonly document: Option.Option<RawDocument>;
+  readonly outboundLinks: ReadonlyArray<string>;
+  readonly etag?: string;
+  readonly lastModified?: string;
+}
+
+/**
+ * Creates an Effect Stream that yields crawled pages from a sitemap.
+ */
+function createSitemapStream(
+  target: WebResourceTarget,
+  httpClient: HttpClient.HttpClient,
+  entries: ReadonlyArray<SitemapEntry>,
+  processed: Record<string, WebProcessedUrlEntry>,
+): Stream.Stream<CrawledPageEvent, ConnectorError> {
+  return Stream.unfold(0, (index: number) =>
+    Effect.gen(function* () {
+      let currentIndex = index;
+
+      while (currentIndex < entries.length) {
+        const entry = entries[currentIndex++];
+        if (!entry) continue;
+        const existing = processed[entry.loc];
+
+        // If sitemap has lastmod and DB record matches, skip network request entirely
+        if (
+          existing &&
+          entry.lastmod &&
+          existing.lastModified === entry.lastmod
+        ) {
+          const event: CrawledPageEvent = {
+            url: entry.loc,
+            finalUrl: entry.loc,
+            notModified: true,
+            document: Option.none(),
+            outboundLinks: [],
+            etag: existing.etag,
+            lastModified: existing.lastModified,
+          };
+          return [event, currentIndex] as const;
+        }
+
+        const fetchRes = yield* fetchPageContent(
+          entry.loc,
+          httpClient,
+          target.headers,
+          existing
+            ? {
+                ifNoneMatch: existing.etag,
+                ifModifiedSince: existing.lastModified,
+              }
+            : undefined,
+        ).pipe(Effect.option);
+
+        if (Option.isNone(fetchRes)) {
+          yield* Effect.logWarning(`Failed to fetch sitemap URL ${entry.loc}`);
+          continue;
+        }
+
+        const pageRes = fetchRes.value;
+        if (pageRes.notModified) {
+          const event: CrawledPageEvent = {
+            url: entry.loc,
+            finalUrl: pageRes.finalUrl,
+            notModified: true,
+            document: Option.none(),
+            outboundLinks: [],
+            etag: pageRes.etag ?? existing?.etag,
+            lastModified: pageRes.lastModified ?? existing?.lastModified,
+          };
+          return [event, currentIndex] as const;
+        }
+
+        const { document, outboundLinks } = buildRawDocument(
+          target,
+          pageRes.finalUrl,
+          entry.loc,
+          pageRes.body,
+          pageRes.status,
+          pageRes.etag,
+          pageRes.lastModified,
+        );
+
+        const event: CrawledPageEvent = {
+          url: entry.loc,
+          finalUrl: pageRes.finalUrl,
+          notModified: false,
+          document: Option.some(document),
+          outboundLinks,
+          etag: pageRes.etag,
+          lastModified: pageRes.lastModified,
+        };
+        return [event, currentIndex] as const;
+      }
+
+      return undefined;
+    }),
+  );
+}
+
+interface SeedCrawlState {
+  readonly queue: readonly string[];
+  readonly visited: ReadonlySet<string>;
+  readonly discovered: number;
+}
+
+/**
+ * Creates an Effect Stream that yields crawled pages using BFS starting from seed URLs.
+ */
+function createSeedCrawlStream(
+  target: WebResourceTarget,
+  httpClient: HttpClient.HttpClient,
+  processed: Record<string, WebProcessedUrlEntry>,
+): Stream.Stream<CrawledPageEvent, ConnectorError> {
+  const initialSeeds =
+    target.seedUrls && target.seedUrls.length > 0
+      ? target.seedUrls
+      : [target.baseUrl];
+
+  const baseHost = tryParseUrl(target.baseUrl).pipe(
+    Option.map((u) => u.hostname),
+    Option.getOrElse(() => ""),
+  );
+
+  const maxPages = target.maxPages ?? 100;
+
+  return Stream.unfold(
+    {
+      queue: initialSeeds,
+      visited: new Set<string>(),
+      discovered: 0,
+    } as SeedCrawlState,
+    (state: SeedCrawlState) =>
+      Effect.gen(function* () {
+        const queue = [...state.queue];
+        const visited = new Set(state.visited);
+        let discovered = state.discovered;
+
+        while (queue.length > 0 && discovered < maxPages) {
+          const currentUrl = queue.shift()!;
+          if (visited.has(currentUrl)) continue;
+          visited.add(currentUrl);
+
+          const existing = processed[currentUrl];
+          const fetchRes = yield* fetchPageContent(
+            currentUrl,
+            httpClient,
+            target.headers,
+            existing
+              ? {
+                  ifNoneMatch: existing.etag,
+                  ifModifiedSince: existing.lastModified,
+                }
+              : undefined,
+          ).pipe(Effect.option);
+
+          if (Option.isNone(fetchRes)) {
+            yield* Effect.logWarning(`Failed to fetch web page ${currentUrl}`);
+            continue;
+          }
+
+          const pageRes = fetchRes.value;
+          visited.add(pageRes.finalUrl);
+
+          if (pageRes.notModified) {
+            discovered++;
+            const event: CrawledPageEvent = {
+              url: currentUrl,
+              finalUrl: pageRes.finalUrl,
+              notModified: true,
+              document: Option.none(),
+              outboundLinks: [],
+              etag: pageRes.etag ?? existing?.etag,
+              lastModified: pageRes.lastModified ?? existing?.lastModified,
+            };
+            return [event, { queue, visited, discovered }] as const;
+          }
+
+          const isSeed =
+            initialSeeds.includes(currentUrl) ||
+            initialSeeds.includes(pageRes.finalUrl);
+          const allowed =
+            isUrlAllowed(
+              pageRes.finalUrl,
+              target.includePatterns,
+              target.excludePatterns,
+            ) || isSeed;
+
+          // Extract outbound links to discover next crawl frontier
+          const content = extractContent(
+            pageRes.finalUrl,
+            pageRes.body,
+            undefined,
+            target.excludePatterns,
+          );
+
+          for (const link of content.extractedLinks) {
+            const parsedOpt = tryParseUrl(link).pipe(
+              Option.map((parsed) => {
+                parsed.hash = "";
+                return {
+                  hostname: parsed.hostname,
+                  normalized: parsed.toString(),
+                };
+              }),
+            );
+
+            if (Option.isSome(parsedOpt)) {
+              const { hostname, normalized } = parsedOpt.value;
+              if (
+                hostname === baseHost &&
+                !visited.has(normalized) &&
+                !queue.includes(normalized)
+              ) {
+                if (
+                  isUrlAllowed(
+                    normalized,
+                    target.includePatterns,
+                    target.excludePatterns,
+                  ) ||
+                  isSeed
+                ) {
+                  queue.push(normalized);
+                }
+              }
+            }
+          }
+
+          if (allowed) {
+            discovered++;
+            const { document, outboundLinks } = buildRawDocument(
+              target,
+              pageRes.finalUrl,
+              currentUrl,
+              pageRes.body,
+              pageRes.status,
+              pageRes.etag,
+              pageRes.lastModified,
+            );
+
+            const event: CrawledPageEvent = {
+              url: currentUrl,
+              finalUrl: pageRes.finalUrl,
+              notModified: false,
+              document: Option.some(document),
+              outboundLinks,
+              etag: pageRes.etag,
+              lastModified: pageRes.lastModified,
+            };
+            return [event, { queue, visited, discovered }] as const;
+          }
+        }
+
+        return undefined;
+      }),
+  );
 }
 
 /**
@@ -652,22 +1010,19 @@ export class WebPageConnector implements SourceConnector<
 > {
   readonly id: string;
   readonly source = "web";
-  private readonly pageCache = new Map<
-    string,
-    {
-      body: string;
-      finalUrl: string;
-      status: number;
-      etag?: string;
-      lastModified?: string;
-    }
-  >();
 
   constructor(
     readonly target: WebResourceTarget,
     private readonly httpClient: HttpClient.HttpClient,
   ) {
     this.id = `web:${target.name}`;
+  }
+
+  static make(
+    target: WebResourceTarget,
+    httpClient: HttpClient.HttpClient,
+  ): Effect.Effect<WebPageConnector> {
+    return Effect.succeed(new WebPageConnector(target, httpClient));
   }
 
   connect(): Effect.Effect<void, ConnectorError> {
@@ -692,11 +1047,94 @@ export class WebPageConnector implements SourceConnector<
     });
   }
 
+  /**
+   * Effect-native Stream yielding CrawledPageEvent items as pages are discovered and fetched.
+   * Document body memory is released as each downstream stream element is consumed.
+   */
+  crawlStream(
+    cursor: Option.Option<WebCursorData> = Option.none(),
+  ): Stream.Stream<CrawledPageEvent, ConnectorError> {
+    const { target, httpClient } = this;
+    const currentCursor = Option.getOrUndefined(cursor);
+    const processed = currentCursor?.processedUrls ?? {};
+
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        if (target.sitemapUrl) {
+          const sitemapResult = yield* fetchPageContent(
+            target.sitemapUrl,
+            httpClient,
+            target.headers,
+          ).pipe(
+            Effect.map((res) => parseSitemapXml(res.body)),
+            Effect.catch(() => Effect.succeed([])),
+          );
+
+          const validEntries = sitemapResult.filter((entry) =>
+            isUrlAllowed(
+              entry.loc,
+              target.includePatterns,
+              target.excludePatterns,
+            ),
+          );
+
+          if (validEntries.length > 0) {
+            return createSitemapStream(
+              target,
+              httpClient,
+              validEntries,
+              processed,
+            );
+          }
+        }
+
+        return createSeedCrawlStream(target, httpClient, processed);
+      }),
+    );
+  }
+
+  /**
+   * On-the-fly streaming crawl.
+   * Runs crawlStream, passes events to onPage, and returns crawl statistics.
+   */
+  crawlOnTheFly<R = never>(
+    cursor: Option.Option<WebCursorData>,
+    onPage: (event: CrawledPageEvent) => Effect.Effect<void, unknown, R>,
+  ): Effect.Effect<
+    { discovered: number; synced: number; failed: number },
+    ConnectorError,
+    R
+  > {
+    let discovered = 0;
+    let synced = 0;
+    let failed = 0;
+
+    return this.crawlStream(cursor).pipe(
+      Stream.runForEach((event) => {
+        discovered++;
+        return onPage(event).pipe(
+          Effect.matchEffect({
+            onFailure: (err) => {
+              failed++;
+              return Effect.logWarning(
+                `crawlOnTheFly: page processing failed for ${event.finalUrl}: ${String(err)}`,
+              );
+            },
+            onSuccess: () => {
+              synced++;
+              return Effect.void;
+            },
+          }),
+        );
+      }),
+      Effect.map(() => ({ discovered, synced, failed })),
+    );
+  }
+
   discover(
     cursor: Option.Option<WebCursorData>,
   ): Effect.Effect<ReadonlyArray<DiscoveredItem>, ConnectorError> {
     const { target, httpClient } = this;
-    const pageCache = this.pageCache;
     return Effect.gen(function* () {
       const currentCursor = Option.getOrUndefined(cursor);
       const processed = currentCursor?.processedUrls ?? {};
@@ -746,18 +1184,15 @@ export class WebPageConnector implements SourceConnector<
         while (queue.length > 0 && discoveredUrls.length < maxPages) {
           const currentUrl = queue.shift()!;
 
-          const fetchOpt = yield* Effect.option(
-            fetchPageContent(currentUrl, httpClient, target.headers),
-          );
+          const fetchOpt = yield* fetchPageContent(
+            currentUrl,
+            httpClient,
+            target.headers,
+          ).pipe(Effect.option);
 
           if (Option.isNone(fetchOpt)) continue;
           const pageRes = fetchOpt.value;
 
-          // Cache page content so fetch(item) avoids duplicate HTTP calls
-          pageCache.set(pageRes.finalUrl, pageRes);
-          pageCache.set(currentUrl, pageRes);
-
-          // If the page matches includePatterns or is one of initial seeds, keep it
           const isSeed =
             initialSeeds.includes(currentUrl) ||
             initialSeeds.includes(pageRes.finalUrl);
@@ -781,7 +1216,7 @@ export class WebPageConnector implements SourceConnector<
           const content = extractContent(
             pageRes.finalUrl,
             pageRes.body,
-            undefined, // extract all links on the page so intermediate pages can bridge to targets
+            undefined,
             target.excludePatterns,
           );
 
@@ -826,7 +1261,6 @@ export class WebPageConnector implements SourceConnector<
           item.lastmod &&
           existing.lastModified === item.lastmod
         ) {
-          // Unchanged according to lastmod
           continue;
         }
 
@@ -850,61 +1284,28 @@ export class WebPageConnector implements SourceConnector<
     item: DiscoveredItem,
   ): Effect.Effect<ExtractedDocument, ConnectorError> {
     const { target, httpClient } = this;
-    const pageCache = this.pageCache;
     return Effect.gen(function* () {
-      const cached = pageCache.get(item.uri) ?? pageCache.get(item.id);
-      const res =
-        cached !== undefined
-          ? cached
-          : yield* fetchPageContent(item.uri, httpClient, target.headers);
-
-      const content = extractContent(
+      const res = yield* fetchPageContent(item.uri, httpClient, target.headers);
+      const { document } = buildRawDocument(
+        target,
         res.finalUrl,
+        item.uri,
         res.body,
-        target.includePatterns,
-        target.excludePatterns,
+        res.status,
+        res.etag,
+        res.lastModified,
       );
-
-      const docUuid = generateDocumentUuid("web", target.name, res.finalUrl);
-      const text =
-        content.extractedText.length > 0
-          ? content.extractedText
-          : content.title;
-      const sizeBytes = Buffer.byteLength(text, "utf8");
-
-      const doc: RawDocument = {
-        id: docUuid,
-        title: content.title || res.finalUrl,
-        content: text,
-        source: "web",
-        resourceName: target.name,
-        sourceKey: res.finalUrl,
-        sizeBytes,
-        metadata: {
-          url: res.finalUrl,
-          originalUrl: item.uri,
-          domain: new URL(res.finalUrl).hostname,
-          canonicalUrl: content.canonicalUrl,
-          httpStatus: res.status,
-          etag: res.etag,
-          lastModified: res.lastModified,
-          contentHash: sha256Hex(text),
-        },
-        tags: ["web", target.name],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
 
       const provenance: ProvenanceRecord = {
         source: "web",
-        documentId: docUuid,
+        documentId: document.id,
         uri: res.finalUrl,
         timestamp: item.lastModified,
         extractor: "WebPageConnector",
         extractionConfidence: 1.0,
       };
 
-      return { document: doc, provenance };
+      return { document, provenance };
     });
   }
 
@@ -954,7 +1355,7 @@ export class WebConnectorService extends Context.Service<
                 }),
               );
             }
-            return new WebPageConnector(targetOpt.value, httpClient);
+            return yield* WebPageConnector.make(targetOpt.value, httpClient);
           }),
       };
     }),

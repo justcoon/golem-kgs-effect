@@ -36,10 +36,8 @@ export interface S3CursorData {
 }
 
 export interface WebProcessedUrlEntry {
-  readonly url: string;
   readonly etag?: string;
   readonly lastModified?: string;
-  readonly contentHash?: string;
   readonly syncedAt?: string;
 }
 
