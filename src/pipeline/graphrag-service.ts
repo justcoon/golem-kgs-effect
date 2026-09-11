@@ -79,6 +79,186 @@ ${edgeSection}
 `;
 }
 
+/**
+ * Strips internal chunking artifacts such as "[Context: ...]" while preserving
+ * Markdown formatting (headings, bold, lists, quotes, code).
+ */
+export function cleanContentChunk(content: string): string {
+  return content.replace(/^\[Context:\s*[^\]]+\]\s*\n?/i, "").trim();
+}
+
+/**
+ * Checks whether a paragraph extracted from a chunk is clean prose/markdown
+ * rather than a broken syntax fragment (e.g. truncated type definitions or dangling brackets).
+ */
+export function isUsableParagraph(para: string): boolean {
+  const trimmed = para.trim();
+  if (trimmed.length < 25) return false;
+
+  // Reject snippets that start with truncated syntax fragments:
+  // e.g. ": bigint;", "};", "},", ");", "): void"
+  if (/^[:;,\]\}\)]/.test(trimmed)) return false;
+
+  // Reject type field fragments without context, e.g. "environmentId: EnvironmentId;"
+  if (
+    /^[A-Za-z0-9_$]+\s*:\s*[A-Za-z0-9_$<>, ]+;\s*(\/\*|\/\/|\n|$)/.test(trimmed)
+  ) {
+    return false;
+  }
+
+  // Reject dangling closing braces or export artifacts
+  if (/^(\s*[\}\]\);,]+)+$/.test(trimmed)) return false;
+
+  return true;
+}
+
+/**
+ * Ensures code fences and inline backticks are properly balanced in a markdown snippet.
+ */
+export function sanitizeMarkdownBlock(text: string): string {
+  let cleaned = text.trim();
+
+  // Strip leading stray bracket/semicolon lines
+  cleaned = cleaned.replace(/^[\s;,\}\]\)]+\n+/, "");
+
+  // Check code fence balance (```)
+  const tripleMatches = cleaned.match(/```/g);
+  const tripleCount = tripleMatches ? tripleMatches.length : 0;
+  if (tripleCount % 2 !== 0) {
+    cleaned += "\n```";
+  }
+
+  // Check inline backtick balance outside of code fences
+  const withoutFences = cleaned.replace(/```[\s\S]*?```/g, "");
+  const singleMatches = withoutFences.match(/`/g);
+  const singleCount = singleMatches ? singleMatches.length : 0;
+  if (singleCount % 2 !== 0) {
+    if (cleaned.endsWith("`")) {
+      cleaned = cleaned.slice(0, -1).trimEnd();
+    } else if (cleaned.startsWith("`")) {
+      cleaned = cleaned.slice(1).trimStart();
+    } else {
+      cleaned += "`";
+    }
+  }
+
+  return cleaned;
+}
+
+/**
+ * Synthesizes a structured Markdown answer from the GraphRAG retrieval context bundle.
+ * Formats evidence paragraphs, key entities, and graph relationships as clean Markdown
+ * for rich display in the frontend (rendered via marked) and REST/MCP clients.
+ */
+export function synthesizeAnswerText(
+  query: string,
+  bundle: GraphRAGContextBundle,
+): string {
+  if (bundle.relevantChunks.length === 0 && bundle.entities.length === 0) {
+    return `No matching knowledge graph entities or documents found for query "${query}".`;
+  }
+
+  const sections: string[] = [];
+
+  // 1. Relevant Document Evidence / Synthesized Answer Content
+  const usefulParagraphs: string[] = [];
+  const seenParagraphs = new Set<string>();
+
+  for (const chunk of bundle.relevantChunks.slice(0, 5)) {
+    const rawContent = cleanContentChunk(chunk.content);
+    if (!rawContent) continue;
+
+    // Split paragraphs on blank lines while preserving markdown formatting
+    const paragraphs = rawContent
+      .split(/\n\s*\n/)
+      .map((p) => sanitizeMarkdownBlock(p.trim()))
+      .filter((p) => isUsableParagraph(p));
+
+    for (const para of paragraphs) {
+      const signature = para.toLowerCase().replace(/\s+/g, " ").slice(0, 80);
+      if (!seenParagraphs.has(signature)) {
+        seenParagraphs.add(signature);
+        usefulParagraphs.push(para);
+      }
+      if (usefulParagraphs.length >= 3) break;
+    }
+    if (usefulParagraphs.length >= 3) break;
+  }
+
+  if (usefulParagraphs.length > 0) {
+    sections.push(usefulParagraphs.join("\n\n"));
+  } else if (bundle.relevantChunks[0]?.content) {
+    const fallback = sanitizeMarkdownBlock(
+      cleanContentChunk(bundle.relevantChunks[0].content),
+    );
+    if (fallback) {
+      sections.push(fallback);
+    }
+  }
+
+  // 2. Key Entities Grounded in Query
+  if (bundle.entities.length > 0) {
+    const topEntities = bundle.entities.slice(0, 5);
+    const entityLines = topEntities.map((e) => {
+      // Suppress extraction provenance placeholders like "Extracted from <uuid>" or raw UUIDs
+      const isProvenanceOrUuid =
+        !e.description ||
+        /^Extracted from\s+[0-9a-f-]+/i.test(e.description.trim()) ||
+        /^[0-9a-f-]{30,}$/i.test(e.description.trim());
+      const desc = !isProvenanceOrUuid ? ` — ${e.description!.trim()}` : "";
+      const typeBadge = e.entityType ? ` (*${e.entityType}*)` : "";
+      return `- **${e.name}**${typeBadge}${desc}`;
+    });
+    if (entityLines.length > 0) {
+      sections.push(`### Key Entities\n${entityLines.join("\n")}`);
+    }
+  }
+
+  // 3. Grounded Relationship Insights
+  if (bundle.relationships.length > 0) {
+    const entityMap = new Map<string, string>();
+    for (const e of bundle.entities) {
+      entityMap.set(e.id, e.name);
+    }
+    const seenRels = new Set<string>();
+    const relLines: string[] = [];
+
+    for (const rel of bundle.relationships) {
+      const src = entityMap.get(rel.sourceId) ?? rel.sourceId;
+      const tgt = entityMap.get(rel.targetId) ?? rel.targetId;
+
+      // Skip self loops or unresolved raw UUID pairs
+      if (!src || !tgt || src === tgt) continue;
+      if (/^[0-9a-f-]{32,}$/i.test(src) || /^[0-9a-f-]{32,}$/i.test(tgt))
+        continue;
+
+      const relVerb =
+        rel.relationType.toUpperCase() === "CO_OCCURS_WITH"
+          ? "associated with"
+          : rel.relationType.toLowerCase().replace(/_/g, " ");
+
+      // Deduplicate bidirectional or repeated relationships
+      const pairKey =
+        [src.toLowerCase(), tgt.toLowerCase()].sort().join("<->") +
+        `::${relVerb}`;
+      if (seenRels.has(pairKey)) continue;
+      seenRels.add(pairKey);
+
+      relLines.push(`- **${src}** *${relVerb}* **${tgt}**`);
+      if (relLines.length >= 5) break;
+    }
+
+    if (relLines.length > 0) {
+      sections.push(`### Knowledge Graph Insights\n${relLines.join("\n")}`);
+    }
+  }
+
+  return (
+    sections.join("\n\n") ||
+    `Retrieved ${bundle.entities.length} related entities and ${bundle.relevantChunks.length} documents matching "${query}".`
+  );
+}
+
 export class GraphRAGService extends Context.Service<
   GraphRAGService,
   GraphRAGServiceShape

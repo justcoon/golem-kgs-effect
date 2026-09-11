@@ -34,6 +34,7 @@ import {
   EmbeddingService,
   EntityResolverService,
   ExtractionService,
+  GraphRAGService,
 } from "../src/pipeline/index.js";
 import { runS3Ingestion } from "../src/pipeline/s3-ingestion-pipeline.js";
 import { type RawDocument } from "../src/domain/provenance.js";
@@ -659,6 +660,220 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       // Force causes re-discovery of all 2 prefix items
       assert.equal(result.metrics.totalDiscovered, 4); // 2 previous + 2 new
       assert.equal(result.metrics.totalSynced, 4);
+    });
+  });
+
+  describe("Agent Pipeline Layer Isolation & Minimal Dependencies", () => {
+    it("KnowledgeAccessAgent dependencies are minimal and do not require connector services or extraction", async () => {
+      // Mock repos for AccessAgent
+      const accessOnlyDocRepo: DocumentRepositoryShape = {
+        saveDocument: () => Effect.die("not implemented"),
+        findDocumentById: () => Effect.succeed(Option.none()),
+        findByResourceKey: () => Effect.succeed(Option.none()),
+        listDocuments: () => Effect.succeed([]),
+        deleteDocument: () => Effect.succeed(true),
+        count: () => Effect.succeed(0),
+      };
+
+      const accessOnlyChunkRepo: ChunkRepositoryShape = {
+        saveRawDocument: () => Effect.die("not implemented"),
+        getRawDocument: () => Effect.succeed(Option.none()),
+        upsertChunk: () => Effect.die("not implemented"),
+        getChunksByDocument: () => Effect.succeed([]),
+        linkEntityChunk: () => Effect.succeed(undefined),
+        getChunksForEntity: () => Effect.succeed([]),
+        getEntityIdsForChunks: () => Effect.succeed([]),
+        searchVector: () => Effect.succeed([]),
+        searchKeyword: () => Effect.succeed([]),
+        searchHybrid: () => Effect.succeed([]),
+        count: () => Effect.succeed(0),
+      };
+
+      const accessOnlyEntityRepo: EntityRepositoryShape = {
+        findById: () => Effect.succeed(Option.none()),
+        findByIds: () => Effect.succeed([]),
+        findByName: () => Effect.succeed(Option.none()),
+        findByAlias: () => Effect.succeed(Option.none()),
+        upsertEntity: () => Effect.die("not implemented"),
+        updateEntity: () => Effect.succeed(Option.none()),
+        addAlias: () => Effect.die("not implemented"),
+        listAliases: () => Effect.succeed([]),
+        searchByName: () => Effect.succeed([]),
+        getTopConnected: () => Effect.succeed([]),
+        deleteEntity: () => Effect.succeed(true),
+        count: () => Effect.succeed(0),
+        getRelatedDocuments: () => Effect.succeed([]),
+      };
+
+      const accessOnlyGraphRepo: GraphRepositoryShape = {
+        upsertEdge: () => Effect.die("not implemented"),
+        findEdge: () => Effect.succeed(Option.none()),
+        getOutboundEdges: () => Effect.succeed([]),
+        getInboundEdges: () => Effect.succeed([]),
+        getNeighborhood: () => Effect.succeed({ entityIds: [], edges: [] }),
+        findPaths: () =>
+          Effect.succeed({ paths: [], exploredNodes: 0, executionTimeMs: 1 }),
+        deleteEdge: () => Effect.succeed(true),
+        countEdges: () => Effect.succeed(0),
+      };
+
+      const accessOnlyLayers = Layer.mergeAll(
+        Layer.succeed(DocumentRepository, accessOnlyDocRepo),
+        Layer.succeed(ChunkRepository, accessOnlyChunkRepo),
+        Layer.succeed(EntityRepository, accessOnlyEntityRepo),
+        Layer.succeed(GraphRepository, accessOnlyGraphRepo),
+        EmbeddingService.Mock,
+      );
+
+      const graphRagLayer = GraphRAGService.Default.pipe(
+        Layer.provide(accessOnlyLayers),
+      );
+
+      const res = await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* GraphRAGService;
+          return yield* service.retrieveContext({ query: "test query" });
+        }).pipe(
+          Effect.provide(graphRagLayer),
+          Effect.provide(accessOnlyLayers),
+        ),
+      );
+
+      assert.ok(res !== undefined);
+      assert.equal(res.query, "test query");
+      assert.equal(res.entities.length, 0);
+      assert.equal(res.relevantChunks.length, 0);
+    });
+
+    it("S3IngestorTaskAgent dependencies do not include WebConnectorService or GraphRAGService", async () => {
+      // testMockLayers contains only S3 connector, Repos, Embedding, Extraction, Resolver.
+      // Confirm runS3Ingestion runs successfully without WebConnectorService or GraphRAGService
+      const s3State: S3TaskState = {
+        resourceName: "main",
+        status: "IDLE",
+        lastSyncTimestamp: null,
+        processedKeys: {},
+        cursor: null,
+        metrics: {
+          totalDiscovered: 0,
+          totalSynced: 0,
+          totalFailed: 0,
+          lastDurationMs: 0,
+        },
+        errorMessage: null,
+      };
+
+      const s3OnlyDocRepo: DocumentRepositoryShape = {
+        saveDocument: (doc) => Effect.succeed(doc),
+        findDocumentById: () => Effect.succeed(Option.none()),
+        findByResourceKey: () => Effect.succeed(Option.none()),
+        listDocuments: () => Effect.succeed([]),
+        deleteDocument: () => Effect.succeed(true),
+        count: () => Effect.succeed(0),
+      };
+
+      const s3OnlyChunkRepo: ChunkRepositoryShape = {
+        saveRawDocument: (doc) => Effect.succeed(doc),
+        getRawDocument: () => Effect.succeed(Option.none()),
+        upsertChunk: () => Effect.die("not needed"),
+        getChunksByDocument: () => Effect.succeed([]),
+        linkEntityChunk: () => Effect.succeed(undefined),
+        getChunksForEntity: () => Effect.succeed([]),
+        getEntityIdsForChunks: () => Effect.succeed([]),
+        searchVector: () => Effect.succeed([]),
+        searchKeyword: () => Effect.succeed([]),
+        searchHybrid: () => Effect.succeed([]),
+        count: () => Effect.succeed(0),
+      };
+
+      const s3OnlyCheckpointRepo: CheckpointRepositoryShape = {
+        saveCheckpoint: (input) =>
+          Effect.succeed({
+            connectorId: input.connectorId,
+            cursor: input.cursor ?? null,
+            status: "SUCCESS",
+            itemsProcessed: input.itemsProcessed,
+            errorMessage: null,
+            lastSyncTimestamp: new Date(),
+          }),
+        getCheckpoint: () => Effect.succeed(Option.none()),
+        listCheckpoints: () => Effect.succeed([]),
+        deleteCheckpoint: () => Effect.succeed(true),
+        getLatestSyncTime: () => Effect.succeed(Option.none()),
+      };
+
+      const s3OnlyEntityRepo: EntityRepositoryShape = {
+        findById: () => Effect.succeed(Option.none()),
+        findByIds: () => Effect.succeed([]),
+        findByName: () => Effect.succeed(Option.none()),
+        findByAlias: () => Effect.succeed(Option.none()),
+        upsertEntity: (input) =>
+          Effect.succeed({
+            id: "ent_id",
+            name: input.name,
+            entityType: input.entityType,
+            description: input.description ?? null,
+            properties: input.properties ?? {},
+            metadata: input.metadata ?? {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        updateEntity: () => Effect.succeed(Option.none()),
+        addAlias: () => Effect.die("not needed"),
+        listAliases: () => Effect.succeed([]),
+        searchByName: () => Effect.succeed([]),
+        getTopConnected: () => Effect.succeed([]),
+        deleteEntity: () => Effect.succeed(true),
+        count: () => Effect.succeed(0),
+        getRelatedDocuments: () => Effect.succeed([]),
+      };
+
+      const s3OnlyGraphRepo: GraphRepositoryShape = {
+        upsertEdge: (input) =>
+          Effect.succeed({
+            sourceId: input.sourceId,
+            targetId: input.targetId,
+            relationType: input.relationType,
+            weight: input.weight ?? 1,
+            confidence: input.confidence ?? 1,
+            properties: input.properties ?? {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        findEdge: () => Effect.succeed(Option.none()),
+        getOutboundEdges: () => Effect.succeed([]),
+        getInboundEdges: () => Effect.succeed([]),
+        getNeighborhood: () => Effect.succeed({ entityIds: [], edges: [] }),
+        findPaths: () =>
+          Effect.succeed({ paths: [], exploredNodes: 0, executionTimeMs: 1 }),
+        deleteEdge: () => Effect.succeed(true),
+        countEdges: () => Effect.succeed(0),
+      };
+
+      const s3OnlyLayers = Layer.mergeAll(
+        Layer.succeed(DocumentRepository, s3OnlyDocRepo),
+        Layer.succeed(ChunkRepository, s3OnlyChunkRepo),
+        Layer.succeed(CheckpointRepository, s3OnlyCheckpointRepo),
+        Layer.succeed(EntityRepository, s3OnlyEntityRepo),
+        Layer.succeed(GraphRepository, s3OnlyGraphRepo),
+        EntityResolverService.Default.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.succeed(EntityRepository, s3OnlyEntityRepo),
+              Layer.succeed(GraphRepository, s3OnlyGraphRepo),
+            ),
+          ),
+        ),
+        EmbeddingService.Mock,
+        ExtractionService.Default,
+        S3ConnectorService.Mock({}, { main: { prefixes: ["rfcs/"] } }),
+      );
+
+      const result = await Effect.runPromise(
+        runS3Ingestion("main", s3State).pipe(Effect.provide(s3OnlyLayers)),
+      );
+
+      assert.equal(result.status, "COMPLETED");
     });
   });
 });

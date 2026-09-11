@@ -4,6 +4,8 @@ import { Effect, Option, Schema } from "effect";
 import { HttpClient } from "effect/unstable/http";
 import {
   extractContent,
+  extractMarkdownFromHtml,
+  extractMarkdownWithNodeHtmlMarkdown,
   extractTextFromHtml,
   isUrlAllowed,
   parseSitemapXml,
@@ -11,6 +13,7 @@ import {
   sha256Hex,
   WebPageConnector,
 } from "../src/connectors/web-connector.js";
+import { DocumentChunker } from "../src/pipeline/chunker.js";
 import {
   WebProcessedUrlEntrySchema,
   WebTaskMetricsSchema,
@@ -80,8 +83,8 @@ describe("Web Connector & Ingestion Subsystem", () => {
     });
   });
 
-  describe("extractTextFromHtml", () => {
-    it("should strip script, style, comments, and chrome elements while preserving text", () => {
+  describe("extractMarkdownFromHtml / extractTextFromHtml", () => {
+    it("should strip script, style, comments, and chrome elements while preserving markdown headings, lists, bold, and text", () => {
       const html = `
 <!DOCTYPE html>
 <html>
@@ -115,12 +118,130 @@ describe("Web Connector & Ingestion Subsystem", () => {
       assert.ok(!text.includes("Home")); // inside <nav>
       assert.ok(!text.includes("&copy; 2026")); // inside <footer>
 
-      assert.ok(text.includes("Introduction to Effect"));
-      assert.ok(text.includes("Effect is a powerful TypeScript library"));
-      assert.ok(text.includes("Core Primitives"));
+      assert.ok(text.includes("# Introduction to Effect"));
+      assert.ok(text.includes("Effect is a powerful **TypeScript** library"));
+      assert.ok(text.includes("## Core Primitives"));
       assert.ok(text.includes("- Effect<Success, Error, Requirements>"));
       assert.ok(
         text.includes('Visit "Golem Cloud" & learn more\'s features today!'),
+      );
+    });
+
+    it("should format code blocks, inline code, blockquotes, and tables as markdown", () => {
+      const html = `
+<div>
+  <h3>Code Samples</h3>
+  <pre><code>const effect = Effect.succeed(42);</code></pre>
+  <p>Run it with <code>Effect.runPromise</code>.</p>
+  <blockquote>Important note about concurrency.</blockquote>
+  <table>
+    <tr><th>Feature</th><th>Supported</th></tr>
+    <tr><td>Markdown</td><td>Yes</td></tr>
+    <tr><td>HTML</td><td>Converted</td></tr>
+  </table>
+  <hr />
+</div>`;
+
+      const md = extractMarkdownFromHtml(html);
+
+      assert.ok(md.includes("### Code Samples"));
+      assert.ok(md.includes("```\nconst effect = Effect.succeed(42);\n```"));
+      assert.ok(md.includes("`Effect.runPromise`"));
+      assert.ok(md.includes("> Important note about concurrency."));
+      assert.ok(md.includes("| Feature | Supported |"));
+      assert.ok(md.includes("| --- | --- |"));
+      assert.ok(md.includes("| Markdown | Yes |"));
+      assert.ok(md.includes("---"));
+    });
+
+    it("should resolve relative links against baseUrl and convert to markdown links", () => {
+      const html = `
+<div>
+  <h2>Documentation</h2>
+  <a href="/docs/guide">Developer Guide</a>
+  <a href="https://example.com/api">API Reference</a>
+  <a href="#section-top">Jump to Top</a>
+  <a href="javascript:void(0)">Action</a>
+</div>`;
+
+      const md = extractMarkdownFromHtml(
+        html,
+        "https://learn.golem.cloud/docs/intro",
+      );
+
+      assert.ok(
+        md.includes("[Developer Guide](https://learn.golem.cloud/docs/guide)"),
+      );
+      assert.ok(md.includes("[API Reference](https://example.com/api)"));
+      // in-page jump and javascript links should retain anchor text without broken href
+      assert.ok(md.includes("Jump to Top"));
+      assert.ok(!md.includes("#section-top"));
+      assert.ok(md.includes("Action"));
+      assert.ok(!md.includes("javascript:"));
+    });
+
+    it("should allow DocumentChunker to parse heading breadcrumbs from extracted HTML markdown", () => {
+      const html = `
+<h1>Main Topic</h1>
+<p>Overview of the topic covering essential architecture and durability models in Golem.</p>
+<h2>Sub Topic A</h2>
+<p>Details about sub topic A explaining state machine replication, retries, and persistence.</p>
+<h3>Deep Nested Topic</h3>
+<p>Very detailed information about nested topic describing vector search and embeddings.</p>
+`;
+
+      const md = extractMarkdownFromHtml(html);
+      const chunkResult = DocumentChunker.chunkText("doc-test-1", md, {
+        minChunkSize: 20,
+      });
+
+      assert.ok(chunkResult.chunks.length > 0);
+      const chunkWithBreadcrumb = chunkResult.chunks.find(
+        (c) =>
+          typeof c.metadata.headerPath === "string" &&
+          c.metadata.headerPath.includes("Main Topic > Sub Topic A"),
+      );
+      assert.ok(chunkWithBreadcrumb, "Expected chunk with breadcrumb trail");
+      assert.equal(
+        chunkWithBreadcrumb?.metadata.heading,
+        chunkWithBreadcrumb?.metadata.headerPath,
+      );
+    });
+  });
+
+  describe("extractMarkdownWithNodeHtmlMarkdown (node-html-markdown)", () => {
+    it("should strip chrome elements and convert HTML to markdown via node-html-markdown", () => {
+      const html = `
+<header><nav><a href="/">Home</a></nav></header>
+<main>
+  <h1>Getting Started with Golem</h1>
+  <p>Learn how to build <strong>durable agents</strong> using <em>Effect</em>.</p>
+  <pre><code>const program = Effect.sync(() => "hello");</code></pre>
+  <ul>
+    <li>Fast</li>
+    <li>Durable</li>
+  </ul>
+  <a href="/docs/guide">Documentation Guide</a>
+</main>
+<footer><p>&copy; 2026 Golem Cloud</p></footer>
+`;
+
+      const md = extractMarkdownWithNodeHtmlMarkdown(
+        html,
+        "https://learn.golem.cloud/docs/intro",
+      );
+
+      assert.ok(!md.includes("Home")); // nav stripped
+      assert.ok(!md.includes("&copy; 2026")); // footer stripped
+      assert.ok(md.includes("# Getting Started with Golem"));
+      assert.ok(md.includes("**durable agents**"));
+      assert.ok(md.includes("*Effect*") || md.includes("_Effect_"));
+      assert.ok(md.includes("- Fast"));
+      assert.ok(md.includes("- Durable"));
+      assert.ok(
+        md.includes(
+          "[Documentation Guide](https://learn.golem.cloud/docs/guide)",
+        ),
       );
     });
   });

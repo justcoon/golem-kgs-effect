@@ -7,7 +7,7 @@ import {
   type S3TaskStatusResponse,
 } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
-import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
+import { makeS3TaskAgentLayer } from "./agent-pipeline-layer.js";
 import { runS3Ingestion } from "../pipeline/s3-ingestion-pipeline.js";
 
 const toStatusResponse = (s: S3TaskState): S3TaskStatusResponse => ({
@@ -64,7 +64,7 @@ export const S3IngestorTaskAgent = defineAgent({
 }).implement(({ resourceName }, snapshot) =>
   Effect.gen(function* () {
     const config = yield* AppAgentConfig;
-    const pipelineLayer = yield* makeAgentPipelineLayer(config);
+    const pipelineLayer = yield* makeS3TaskAgentLayer(config);
 
     const state = yield* snapshot.init({
       resourceName,

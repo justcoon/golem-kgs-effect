@@ -207,6 +207,7 @@ export class DocumentChunker {
         metadata: {
           ...(baseMetadata ?? {}),
           headerPath: item.header,
+          heading: item.header,
           charCount,
           byteOffsetStart: byteStart,
           byteOffsetEnd: byteEnd,
