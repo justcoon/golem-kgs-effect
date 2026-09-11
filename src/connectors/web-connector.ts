@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import {
   ConnectorError,
@@ -8,6 +8,7 @@ import {
   type ExtractedDocument,
   type SourceConnector,
   type WebCursorData,
+  type WebProcessedUrlEntry,
 } from "./connector-base.js";
 import {
   type WebResourceTarget,
@@ -51,13 +52,16 @@ export function resolveUrl(
   return tryParseUrl(relativeOrAbsolute, baseUrl);
 }
 
+export interface SitemapEntry {
+  readonly loc: string;
+  readonly lastmod?: string;
+}
+
 /**
  * Lightweight XML parser for standard sitemap.xml files.
  * Extracts `<url><loc>...</loc><lastmod>...</lastmod></url>` entries.
  */
-export function parseSitemapXml(
-  xmlText: string,
-): ReadonlyArray<{ loc: string; lastmod?: string }> {
+export function parseSitemapXml(xmlText: string): ReadonlyArray<SitemapEntry> {
   const results: Array<{ loc: string; lastmod?: string }> = [];
 
   // Match url entries in <urlset>
@@ -745,6 +749,258 @@ export interface CrawledPageEvent {
 }
 
 /**
+ * Creates an Effect Stream that yields crawled pages from a sitemap.
+ */
+function createSitemapStream(
+  target: WebResourceTarget,
+  httpClient: HttpClient.HttpClient,
+  entries: ReadonlyArray<SitemapEntry>,
+  processed: Record<string, WebProcessedUrlEntry>,
+): Stream.Stream<CrawledPageEvent, ConnectorError> {
+  return Stream.unfold(0, (index: number) =>
+    Effect.gen(function* () {
+      let currentIndex = index;
+
+      while (currentIndex < entries.length) {
+        const entry = entries[currentIndex++];
+        if (!entry) continue;
+        const existing = processed[entry.loc];
+
+        // If sitemap has lastmod and DB record matches, skip network request entirely
+        if (
+          existing &&
+          entry.lastmod &&
+          existing.lastModified === entry.lastmod
+        ) {
+          const event: CrawledPageEvent = {
+            url: entry.loc,
+            finalUrl: entry.loc,
+            notModified: true,
+            document: Option.none(),
+            outboundLinks: [],
+            etag: existing.etag,
+            lastModified: existing.lastModified,
+          };
+          return [event, currentIndex] as const;
+        }
+
+        const fetchRes = yield* fetchPageContent(
+          entry.loc,
+          httpClient,
+          target.headers,
+          existing
+            ? {
+                ifNoneMatch: existing.etag,
+                ifModifiedSince: existing.lastModified,
+              }
+            : undefined,
+        ).pipe(Effect.option);
+
+        if (Option.isNone(fetchRes)) {
+          yield* Effect.logWarning(`Failed to fetch sitemap URL ${entry.loc}`);
+          continue;
+        }
+
+        const pageRes = fetchRes.value;
+        if (pageRes.notModified) {
+          const event: CrawledPageEvent = {
+            url: entry.loc,
+            finalUrl: pageRes.finalUrl,
+            notModified: true,
+            document: Option.none(),
+            outboundLinks: [],
+            etag: pageRes.etag ?? existing?.etag,
+            lastModified: pageRes.lastModified ?? existing?.lastModified,
+          };
+          return [event, currentIndex] as const;
+        }
+
+        const { document, outboundLinks } = buildRawDocument(
+          target,
+          pageRes.finalUrl,
+          entry.loc,
+          pageRes.body,
+          pageRes.status,
+          pageRes.etag,
+          pageRes.lastModified,
+        );
+
+        const event: CrawledPageEvent = {
+          url: entry.loc,
+          finalUrl: pageRes.finalUrl,
+          notModified: false,
+          document: Option.some(document),
+          outboundLinks,
+          etag: pageRes.etag,
+          lastModified: pageRes.lastModified,
+        };
+        return [event, currentIndex] as const;
+      }
+
+      return undefined;
+    }),
+  );
+}
+
+interface SeedCrawlState {
+  readonly queue: readonly string[];
+  readonly visited: ReadonlySet<string>;
+  readonly discovered: number;
+}
+
+/**
+ * Creates an Effect Stream that yields crawled pages using BFS starting from seed URLs.
+ */
+function createSeedCrawlStream(
+  target: WebResourceTarget,
+  httpClient: HttpClient.HttpClient,
+  processed: Record<string, WebProcessedUrlEntry>,
+): Stream.Stream<CrawledPageEvent, ConnectorError> {
+  const initialSeeds =
+    target.seedUrls && target.seedUrls.length > 0
+      ? target.seedUrls
+      : [target.baseUrl];
+
+  const baseHost = tryParseUrl(target.baseUrl).pipe(
+    Option.map((u) => u.hostname),
+    Option.getOrElse(() => ""),
+  );
+
+  const maxPages = target.maxPages ?? 100;
+
+  return Stream.unfold(
+    {
+      queue: initialSeeds,
+      visited: new Set<string>(),
+      discovered: 0,
+    } as SeedCrawlState,
+    (state: SeedCrawlState) =>
+      Effect.gen(function* () {
+        const queue = [...state.queue];
+        const visited = new Set(state.visited);
+        let discovered = state.discovered;
+
+        while (queue.length > 0 && discovered < maxPages) {
+          const currentUrl = queue.shift()!;
+          if (visited.has(currentUrl)) continue;
+          visited.add(currentUrl);
+
+          const existing = processed[currentUrl];
+          const fetchRes = yield* fetchPageContent(
+            currentUrl,
+            httpClient,
+            target.headers,
+            existing
+              ? {
+                  ifNoneMatch: existing.etag,
+                  ifModifiedSince: existing.lastModified,
+                }
+              : undefined,
+          ).pipe(Effect.option);
+
+          if (Option.isNone(fetchRes)) {
+            yield* Effect.logWarning(`Failed to fetch web page ${currentUrl}`);
+            continue;
+          }
+
+          const pageRes = fetchRes.value;
+          visited.add(pageRes.finalUrl);
+
+          if (pageRes.notModified) {
+            discovered++;
+            const event: CrawledPageEvent = {
+              url: currentUrl,
+              finalUrl: pageRes.finalUrl,
+              notModified: true,
+              document: Option.none(),
+              outboundLinks: [],
+              etag: pageRes.etag ?? existing?.etag,
+              lastModified: pageRes.lastModified ?? existing?.lastModified,
+            };
+            return [event, { queue, visited, discovered }] as const;
+          }
+
+          const isSeed =
+            initialSeeds.includes(currentUrl) ||
+            initialSeeds.includes(pageRes.finalUrl);
+          const allowed =
+            isUrlAllowed(
+              pageRes.finalUrl,
+              target.includePatterns,
+              target.excludePatterns,
+            ) || isSeed;
+
+          // Extract outbound links to discover next crawl frontier
+          const content = extractContent(
+            pageRes.finalUrl,
+            pageRes.body,
+            undefined,
+            target.excludePatterns,
+          );
+
+          for (const link of content.extractedLinks) {
+            const parsedOpt = tryParseUrl(link).pipe(
+              Option.map((parsed) => {
+                parsed.hash = "";
+                return {
+                  hostname: parsed.hostname,
+                  normalized: parsed.toString(),
+                };
+              }),
+            );
+
+            if (Option.isSome(parsedOpt)) {
+              const { hostname, normalized } = parsedOpt.value;
+              if (
+                hostname === baseHost &&
+                !visited.has(normalized) &&
+                !queue.includes(normalized)
+              ) {
+                if (
+                  isUrlAllowed(
+                    normalized,
+                    target.includePatterns,
+                    target.excludePatterns,
+                  ) ||
+                  isSeed
+                ) {
+                  queue.push(normalized);
+                }
+              }
+            }
+          }
+
+          if (allowed) {
+            discovered++;
+            const { document, outboundLinks } = buildRawDocument(
+              target,
+              pageRes.finalUrl,
+              currentUrl,
+              pageRes.body,
+              pageRes.status,
+              pageRes.etag,
+              pageRes.lastModified,
+            );
+
+            const event: CrawledPageEvent = {
+              url: currentUrl,
+              finalUrl: pageRes.finalUrl,
+              notModified: false,
+              document: Option.some(document),
+              outboundLinks,
+              etag: pageRes.etag,
+              lastModified: pageRes.lastModified,
+            };
+            return [event, { queue, visited, discovered }] as const;
+          }
+        }
+
+        return undefined;
+      }),
+  );
+}
+
+/**
  * Web Page / Documentation Source Connector implementation.
  */
 export class WebPageConnector implements SourceConnector<
@@ -792,8 +1048,54 @@ export class WebPageConnector implements SourceConnector<
   }
 
   /**
+   * Effect-native Stream yielding CrawledPageEvent items as pages are discovered and fetched.
+   * Document body memory is released as each downstream stream element is consumed.
+   */
+  crawlStream(
+    cursor: Option.Option<WebCursorData> = Option.none(),
+  ): Stream.Stream<CrawledPageEvent, ConnectorError> {
+    const { target, httpClient } = this;
+    const currentCursor = Option.getOrUndefined(cursor);
+    const processed = currentCursor?.processedUrls ?? {};
+
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        if (target.sitemapUrl) {
+          const sitemapResult = yield* fetchPageContent(
+            target.sitemapUrl,
+            httpClient,
+            target.headers,
+          ).pipe(
+            Effect.map((res) => parseSitemapXml(res.body)),
+            Effect.catch(() => Effect.succeed([])),
+          );
+
+          const validEntries = sitemapResult.filter((entry) =>
+            isUrlAllowed(
+              entry.loc,
+              target.includePatterns,
+              target.excludePatterns,
+            ),
+          );
+
+          if (validEntries.length > 0) {
+            return createSitemapStream(
+              target,
+              httpClient,
+              validEntries,
+              processed,
+            );
+          }
+        }
+
+        return createSeedCrawlStream(target, httpClient, processed);
+      }),
+    );
+  }
+
+  /**
    * On-the-fly streaming crawl.
-   * Emits pages as they are discovered and fetched, releasing body memory immediately.
+   * Runs crawlStream, passes events to onPage, and returns crawl statistics.
    */
   crawlOnTheFly<R = never>(
     cursor: Option.Option<WebCursorData>,
@@ -803,250 +1105,30 @@ export class WebPageConnector implements SourceConnector<
     ConnectorError,
     R
   > {
-    const { target, httpClient } = this;
-    return Effect.gen(function* () {
-      const currentCursor = Option.getOrUndefined(cursor);
-      const processed = currentCursor?.processedUrls ?? {};
+    let discovered = 0;
+    let synced = 0;
+    let failed = 0;
 
-      let discovered = 0;
-      let synced = 0;
-      let failed = 0;
-
-      // 1. If sitemapUrl is specified, attempt to fetch and parse it
-      if (target.sitemapUrl) {
-        const sitemapResult = yield* fetchPageContent(
-          target.sitemapUrl,
-          httpClient,
-          target.headers,
-        ).pipe(
-          Effect.map((res) => parseSitemapXml(res.body)),
-          Effect.catch(() => Effect.succeed([])),
+    return this.crawlStream(cursor).pipe(
+      Stream.runForEach((event) => {
+        discovered++;
+        return onPage(event).pipe(
+          Effect.matchEffect({
+            onFailure: (err) => {
+              failed++;
+              return Effect.logWarning(
+                `crawlOnTheFly: page processing failed for ${event.finalUrl}: ${String(err)}`,
+              );
+            },
+            onSuccess: () => {
+              synced++;
+              return Effect.void;
+            },
+          }),
         );
-
-        for (const entry of sitemapResult) {
-          if (
-            !isUrlAllowed(
-              entry.loc,
-              target.includePatterns,
-              target.excludePatterns,
-            )
-          ) {
-            continue;
-          }
-          discovered++;
-          const existing = processed[entry.loc];
-
-          // If sitemap has lastmod and DB record matches, skip network request entirely
-          if (
-            existing &&
-            entry.lastmod &&
-            existing.lastModified === entry.lastmod
-          ) {
-            yield* onPage({
-              url: entry.loc,
-              finalUrl: entry.loc,
-              notModified: true,
-              document: Option.none(),
-              outboundLinks: [],
-              etag: existing.etag,
-              lastModified: existing.lastModified,
-            }).pipe(Effect.ignore);
-            synced++;
-            continue;
-          }
-
-          const fetchRes = yield* fetchPageContent(
-            entry.loc,
-            httpClient,
-            target.headers,
-            existing
-              ? {
-                  ifNoneMatch: existing.etag,
-                  ifModifiedSince: existing.lastModified,
-                }
-              : undefined,
-          ).pipe(Effect.option);
-
-          if (Option.isNone(fetchRes)) {
-            failed++;
-            continue;
-          }
-
-          const pageRes = fetchRes.value;
-          if (pageRes.notModified) {
-            yield* onPage({
-              url: entry.loc,
-              finalUrl: pageRes.finalUrl,
-              notModified: true,
-              document: Option.none(),
-              outboundLinks: [],
-              etag: pageRes.etag ?? existing?.etag,
-              lastModified: pageRes.lastModified ?? existing?.lastModified,
-            }).pipe(Effect.ignore);
-            synced++;
-            continue;
-          }
-
-          const { document, outboundLinks } = buildRawDocument(
-            target,
-            pageRes.finalUrl,
-            entry.loc,
-            pageRes.body,
-            pageRes.status,
-            pageRes.etag,
-            pageRes.lastModified,
-          );
-
-          yield* onPage({
-            url: entry.loc,
-            finalUrl: pageRes.finalUrl,
-            notModified: false,
-            document: Option.some(document),
-            outboundLinks,
-            etag: pageRes.etag,
-            lastModified: pageRes.lastModified,
-          }).pipe(Effect.ignore);
-          synced++;
-        }
-
-        if (discovered > 0) {
-          return { discovered, synced, failed };
-        }
-      }
-
-      // 2. If no sitemap or sitemap produced no URLs, crawl starting from seedUrls (or baseUrl)
-      const initialSeeds =
-        target.seedUrls && target.seedUrls.length > 0
-          ? target.seedUrls
-          : [target.baseUrl];
-
-      const baseHost = tryParseUrl(target.baseUrl).pipe(
-        Option.map((u) => u.hostname),
-        Option.getOrElse(() => ""),
-      );
-
-      const maxPages = target.maxPages ?? 100;
-      const queue: string[] = [...initialSeeds];
-      const visited = new Set<string>();
-
-      while (queue.length > 0 && discovered < maxPages) {
-        const currentUrl = queue.shift()!;
-        if (visited.has(currentUrl)) continue;
-        visited.add(currentUrl);
-
-        const existing = processed[currentUrl];
-        const fetchRes = yield* fetchPageContent(
-          currentUrl,
-          httpClient,
-          target.headers,
-          existing
-            ? {
-                ifNoneMatch: existing.etag,
-                ifModifiedSince: existing.lastModified,
-              }
-            : undefined,
-        ).pipe(Effect.option);
-
-        if (Option.isNone(fetchRes)) {
-          failed++;
-          continue;
-        }
-
-        const pageRes = fetchRes.value;
-        visited.add(pageRes.finalUrl);
-
-        if (pageRes.notModified) {
-          yield* onPage({
-            url: currentUrl,
-            finalUrl: pageRes.finalUrl,
-            notModified: true,
-            document: Option.none(),
-            outboundLinks: [],
-            etag: pageRes.etag ?? existing?.etag,
-            lastModified: pageRes.lastModified ?? existing?.lastModified,
-          }).pipe(Effect.ignore);
-          discovered++;
-          synced++;
-          continue;
-        }
-
-        const isSeed =
-          initialSeeds.includes(currentUrl) ||
-          initialSeeds.includes(pageRes.finalUrl);
-        const allowed =
-          isUrlAllowed(
-            pageRes.finalUrl,
-            target.includePatterns,
-            target.excludePatterns,
-          ) || isSeed;
-
-        // Extract outbound links to discover next crawl frontier
-        const content = extractContent(
-          pageRes.finalUrl,
-          pageRes.body,
-          undefined,
-          target.excludePatterns,
-        );
-
-        for (const link of content.extractedLinks) {
-          const parsedOpt = tryParseUrl(link).pipe(
-            Option.map((parsed) => {
-              parsed.hash = "";
-              return {
-                hostname: parsed.hostname,
-                normalized: parsed.toString(),
-              };
-            }),
-          );
-
-          if (Option.isSome(parsedOpt)) {
-            const { hostname, normalized } = parsedOpt.value;
-            if (
-              hostname === baseHost &&
-              !visited.has(normalized) &&
-              !queue.includes(normalized)
-            ) {
-              if (
-                isUrlAllowed(
-                  normalized,
-                  target.includePatterns,
-                  target.excludePatterns,
-                ) ||
-                isSeed
-              ) {
-                queue.push(normalized);
-              }
-            }
-          }
-        }
-
-        if (allowed) {
-          discovered++;
-          const { document, outboundLinks } = buildRawDocument(
-            target,
-            pageRes.finalUrl,
-            currentUrl,
-            pageRes.body,
-            pageRes.status,
-            pageRes.etag,
-            pageRes.lastModified,
-          );
-
-          yield* onPage({
-            url: currentUrl,
-            finalUrl: pageRes.finalUrl,
-            notModified: false,
-            document: Option.some(document),
-            outboundLinks,
-            etag: pageRes.etag,
-            lastModified: pageRes.lastModified,
-          }).pipe(Effect.ignore);
-          synced++;
-        }
-      }
-
-      return { discovered, synced, failed };
-    });
+      }),
+      Effect.map(() => ({ discovered, synced, failed })),
+    );
   }
 
   discover(

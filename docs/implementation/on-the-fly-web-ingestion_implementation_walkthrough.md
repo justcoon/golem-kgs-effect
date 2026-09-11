@@ -23,9 +23,11 @@ We have redesigned the web ingestion subsystem to operate **on the fly** in a si
 
 | Action     | File Path                                                                 | Summary of Changes                                                                                                                                                                                                                 |
 | :--------- | :------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[MODIFY]` | [`src/connectors/web-connector.ts`](../../src/connectors/web-connector.ts)         | Added `ConditionalHeaders` and HTTP 304 handling in `fetchPageContent`; added `crawlOnTheFly` method and standalone `buildRawDocument`; removed full-body `pageCache`; simplified `discover` and `fetch`.                          |
-| `[MODIFY]` | [`src/pipeline/web-ingestion-pipeline.ts`](../../src/pipeline/web-ingestion-pipeline.ts) | Rewired `runWebIngestion` to call `connector.crawlOnTheFly`, indexing documents to DB on the fly with progressive checkpointing every 10 documents.                                                                                |
-| `[MODIFY]` | [`test/web-connector.test.ts`](../../test/web-connector.test.ts)                 | Added tests validating on-the-fly crawl emission without body retention, HTTP 304 conditional request skipping, and backward compatibility of `connector.discover` and `connector.fetch`.                                         |
+| `[MODIFY]` | [`src/connectors/connector-base.ts`](../../src/connectors/connector-base.ts)     | Streamlined `WebProcessedUrlEntry` to contain only `etag`, `lastModified`, and `syncedAt` (removed redundant `url` and unused `contentHash`).                                                     |
+| `[MODIFY]` | [`src/agents/types.ts`](../../src/agents/types.ts)                                 | Trimmed `WebProcessedUrlEntrySchema` to `etag`, `lastModified`, `syncedAt`; introduced `WebProcessedUrlStatusEntrySchema` for external status responses.                                         |
+| `[MODIFY]` | [`src/connectors/web-connector.ts`](../../src/connectors/web-connector.ts)         | Added `crawlStream` exposing an Effect-native `Stream.Stream<CrawledPageEvent, ConnectorError>` for lazy page emission; eliminated `Effect.ignore` in `crawlOnTheFly` by using `Effect.matchEffect`; added `createSitemapStream` and `createSeedCrawlStream` helpers; removed full-body cache. |
+| `[MODIFY]` | [`src/pipeline/web-ingestion-pipeline.ts`](../../src/pipeline/web-ingestion-pipeline.ts) | Rewired `runWebIngestion` to consume `connector.crawlStream(cursorData)` directly via `Stream.runForEach`, indexing documents to DB on the fly with progressive checkpointing every 10 documents; converted `processedUrls` and progress counters to pure Effect `HashMap` and `Ref` instances. |
+| `[MODIFY]` | [`test/web-connector.test.ts`](../../test/web-connector.test.ts)                 | Added tests validating `crawlStream` with `Stream.runCollect`, accurate failure accounting in `crawlOnTheFly` without phantom synced increments, HTTP 304 conditional request skipping, and backward compatibility. |
 
 ### Key Architectural Flow
 
@@ -34,24 +36,26 @@ sequenceDiagram
     autonumber
     participant Pipeline as WebIngestionPipeline
     participant DB as SQLite/Postgres DB
-    participant Connector as WebPageConnector
+    participant Connector as WebPageConnector (crawlStream)
     participant Remote as External Web Server
     participant Processor as processAndIndexDocument
 
     Pipeline->>DB: 1. Read Checkpoint (processedUrls, ETag, lastModified)
     DB-->>Pipeline: Return known URLs metadata
 
-    loop For each URL in Crawl Queue (until maxPages)
-        Pipeline->>Connector: crawlOnTheFly
+    Pipeline->>Connector: 2. connector.crawlStream(cursorData)
+    Note over Pipeline, Connector: Stream.runForEach consumes CrawledPageEvent items lazily
+
+    loop For each URL in Stream (Stream.unfold)
         Connector->>Remote: HTTP GET (If-None-Match: etag, If-Modified-Since: lastmod)
         alt HTTP 304 Not Modified
             Remote-->>Connector: 304 Not Modified
-            Connector-->>Pipeline: notModified: true
-            Pipeline->>Pipeline: Update syncedAt in memory state
+            Connector-->>Pipeline: Emit CrawledPageEvent (notModified: true)
+            Pipeline->>Pipeline: Update syncedAt in memory state, syncedCount++
         else HTTP 200 OK
             Remote-->>Connector: 200 OK + HTML Body
             Connector->>Connector: Extract Markdown & Outbound Links
-            Connector-->>Pipeline: Return RawDocument + Outbound Links
+            Connector-->>Pipeline: Emit CrawledPageEvent (document: Some(doc), outboundLinks)
 
             Note over Pipeline, DB: Immediate DB Storage On-The-Fly
             Pipeline->>Processor: processAndIndexDocument(document)
@@ -60,9 +64,9 @@ sequenceDiagram
             Processor->>DB: fuseKnowledge -> entities & relationships tables
             Processor->>DB: linkEntityChunk -> entity_chunks table
 
-            Note over Pipeline: Immediate Memory Reclamation
+            Note over Pipeline: Immediate Memory Reclamation & Accurate Metrics
             Pipeline->>Pipeline: Discard RawDocument & HTML body (freed by GC)
-            Pipeline->>Pipeline: Push new outbound links to Crawl Queue
+            Pipeline->>Pipeline: syncedCount++ (only on successful indexing)
 
             opt Every 10 pages OR crawl completion
                 Pipeline->>DB: Save sync checkpoint to sync_checkpoints table
@@ -101,15 +105,17 @@ Command: `npm run lint`
 ### 3.4 Automated Test Suite
 Command: `npm test`
 ```text
-ℹ tests 129
+ℹ tests 131
 ℹ suites 48
-ℹ pass 129
+ℹ pass 131
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
 ```
 Including tests:
+- `should emit CrawledPageEvents via crawlStream and collect them via Stream.runCollect`
+- `should account for page failures accurately in crawlOnTheFly without phantom synced increments`
 - `should crawl on the fly emitting documents and extracting links without retaining bodies in cache`
 - `should handle HTTP 304 Not Modified and skip document body processing when cursor is fresh`
 - `should recursively crawl internal links from seedUrls matching includePatterns`
@@ -123,7 +129,7 @@ Building components
   Building golem-kgs-effect:effect-main
     ...
     Writing pre-initialized component ...
-Done! Input: 13147.3 KB, Output: 40166.1 KB
+Done! Input: 13148.0 KB, Output: 40168.9 KB
 Adding metadata to components
   Adding metadata to golem-kgs-effect:effect-main
 
@@ -134,4 +140,8 @@ Finished building [OK]
 
 ## 4. Conclusion
 
-The on-the-fly web ingestion pipeline and minimal memory architecture are fully implemented, verified with comprehensive tests, and compiled into the Golem component bundle.
+The on-the-fly web ingestion pipeline now uses an Effect-native `Stream.Stream` architecture:
+1. `connector.crawlStream(...)` lazily unfolds pages without caching HTML bodies.
+2. `Effect.ignore` has been completely eliminated; processing failures are accurately accounted for with no phantom sync counts.
+3. Memory consumption remains $O(1)$ relative to page bodies.
+4. All 131 test cases and `golem build` succeeded.

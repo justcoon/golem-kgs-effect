@@ -14,7 +14,10 @@ const toStatusResponse = (s: WebTaskState): WebTaskStatusResponse => ({
   resourceName: s.resourceName,
   status: s.status,
   lastSyncTimestamp: s.lastSyncTimestamp,
-  processedUrls: Object.values(s.processedUrls),
+  processedUrls: Object.entries(s.processedUrls).map(([url, entry]) => ({
+    url,
+    ...entry,
+  })),
   cursor: s.cursor,
   metrics: s.metrics,
   errorMessage: s.errorMessage,

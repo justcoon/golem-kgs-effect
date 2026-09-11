@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect";
+import { Effect, HashMap, Option, Ref, Stream } from "effect";
 import {
   type WebProcessedUrlEntry,
   type WebTaskMetrics,
@@ -60,25 +60,35 @@ export function runWebIngestion(
             processedUrls: currentState.processedUrls,
           });
 
-    const newProcessedUrls: Record<string, WebProcessedUrlEntry> = force
-      ? {}
-      : { ...currentState.processedUrls };
+    const processedRef = yield* Ref.make<
+      HashMap.HashMap<string, WebProcessedUrlEntry>
+    >(
+      force
+        ? HashMap.empty()
+        : HashMap.fromIterable(Object.entries(currentState.processedUrls)),
+    );
 
-    let syncedCount = 0;
-    let failedCount = 0;
+    const discoveredCountRef = yield* Ref.make(0);
+    const syncedCountRef = yield* Ref.make(0);
+    const failedCountRef = yield* Ref.make(0);
 
-    const crawlResult = yield* connector
-      .crawlOnTheFly(cursorData, (event) =>
+    yield* connector.crawlStream(cursorData).pipe(
+      Stream.runForEach((event) =>
         Effect.gen(function* () {
+          yield* Ref.update(discoveredCountRef, (n) => n + 1);
+
           if (event.notModified) {
-            const existing = newProcessedUrls[event.finalUrl];
-            if (existing) {
-              newProcessedUrls[event.finalUrl] = {
-                ...existing,
-                syncedAt: new Date().toISOString(),
-              };
-            }
-            syncedCount++;
+            yield* Ref.update(processedRef, (map) =>
+              HashMap.modifyAt(
+                map,
+                event.finalUrl,
+                Option.map((entry) => ({
+                  ...entry,
+                  syncedAt: new Date().toISOString(),
+                })),
+              ),
+            );
+            yield* Ref.update(syncedCountRef, (n) => n + 1);
             return;
           }
 
@@ -87,29 +97,32 @@ export function runWebIngestion(
             yield* processAndIndexDocument(document);
 
             const meta = (document.metadata ?? {}) as Record<string, unknown>;
-            newProcessedUrls[event.finalUrl] = {
-              url: event.finalUrl,
+            const entry: WebProcessedUrlEntry = {
               etag: typeof meta.etag === "string" ? meta.etag : event.etag,
               lastModified:
                 typeof meta.lastModified === "string"
                   ? meta.lastModified
                   : event.lastModified,
-              contentHash:
-                typeof meta.contentHash === "string"
-                  ? meta.contentHash
-                  : undefined,
               syncedAt: new Date().toISOString(),
             };
-            syncedCount++;
+            yield* Ref.update(processedRef, (map) =>
+              HashMap.set(map, event.finalUrl, entry),
+            );
+            const syncedCount = yield* Ref.updateAndGet(
+              syncedCountRef,
+              (n) => n + 1,
+            );
 
             // Progressive checkpointing every 10 pages
             if (syncedCount % 10 === 0) {
+              const currentProcessed = yield* Ref.get(processedRef);
+              const failedCount = yield* Ref.get(failedCountRef);
               yield* checkpointRepo
                 .saveCheckpoint({
                   connectorId: `web_${resourceName}`,
                   cursorData: {
                     lastSyncTimestamp: new Date().toISOString(),
-                    processedUrls: newProcessedUrls,
+                    processedUrls: Object.fromEntries(currentProcessed),
                   },
                   status: "RUNNING",
                   metrics: {
@@ -122,38 +135,46 @@ export function runWebIngestion(
             }
           }
         }).pipe(
-          Effect.catch((err: unknown) => {
-            failedCount++;
-            return Effect.logWarning(
-              `Failed to process document for ${event.finalUrl}: ${String(err)}`,
-            );
-          }),
+          Effect.catch((err: unknown) =>
+            Effect.gen(function* () {
+              yield* Ref.update(failedCountRef, (n) => n + 1);
+              yield* Effect.logWarning(
+                `Failed to process document for ${event.finalUrl}: ${String(err)}`,
+              );
+            }),
+          ),
         ),
-      )
-      .pipe(
-        Effect.catch(() => {
-          failedCount++;
-          return Effect.succeed({
-            discovered: 0,
-            synced: syncedCount,
-            failed: failedCount,
-          });
+      ),
+      Effect.catch((err) =>
+        Effect.gen(function* () {
+          yield* Ref.update(failedCountRef, (n) => n + 1);
+          yield* Effect.logWarning(
+            `Crawl stream error for resource ${resourceName}: ${String(err)}`,
+          );
         }),
-      );
+      ),
+    );
 
     const duration = Date.now() - startTime;
     const nowIso = new Date().toISOString();
+
+    const finalProcessed = yield* Ref.get(processedRef);
+    const finalProcessedUrls: Record<string, WebProcessedUrlEntry> =
+      Object.fromEntries(finalProcessed);
+    const discoveredCount = yield* Ref.get(discoveredCountRef);
+    const syncedCount = yield* Ref.get(syncedCountRef);
+    const failedCount = yield* Ref.get(failedCountRef);
 
     yield* checkpointRepo
       .saveCheckpoint({
         connectorId: `web_${resourceName}`,
         cursorData: {
           lastSyncTimestamp: nowIso,
-          processedUrls: newProcessedUrls,
+          processedUrls: finalProcessedUrls,
         },
         status: failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED",
         metrics: {
-          discovered: crawlResult.discovered,
+          discovered: discoveredCount,
           synced: syncedCount,
           failed: failedCount,
           durationMs: duration,
@@ -171,11 +192,10 @@ export function runWebIngestion(
     return {
       status,
       lastSyncTimestamp: nowIso,
-      processedUrls: newProcessedUrls,
+      processedUrls: finalProcessedUrls,
       cursor: null,
       metrics: {
-        totalDiscovered:
-          currentState.metrics.totalDiscovered + crawlResult.discovered,
+        totalDiscovered: currentState.metrics.totalDiscovered + discoveredCount,
         totalSynced: currentState.metrics.totalSynced + syncedCount,
         totalFailed: currentState.metrics.totalFailed + failedCount,
         lastDurationMs: duration,

@@ -84,13 +84,20 @@ export const WebTaskStatusSchema = Schema.Literals([
 export type WebTaskStatus = typeof WebTaskStatusSchema.Type;
 
 export const WebProcessedUrlEntrySchema = Schema.Struct({
-  url: Schema.String,
   etag: Schema.optional(Schema.String),
   lastModified: Schema.optional(Schema.String),
-  contentHash: Schema.optional(Schema.String),
   syncedAt: Schema.optional(Schema.String),
 });
 export type WebProcessedUrlEntry = typeof WebProcessedUrlEntrySchema.Type;
+
+export const WebProcessedUrlStatusEntrySchema = Schema.Struct({
+  url: Schema.String,
+  etag: Schema.optional(Schema.String),
+  lastModified: Schema.optional(Schema.String),
+  syncedAt: Schema.optional(Schema.String),
+});
+export type WebProcessedUrlStatusEntry =
+  typeof WebProcessedUrlStatusEntrySchema.Type;
 
 export const WebTaskStateSchema = Schema.Struct({
   resourceName: Schema.String,
@@ -107,7 +114,7 @@ export const WebTaskStatusResponseSchema = Schema.Struct({
   resourceName: Schema.String,
   status: WebTaskStatusSchema,
   lastSyncTimestamp: Schema.NullOr(Schema.String),
-  processedUrls: Schema.Array(WebProcessedUrlEntrySchema),
+  processedUrls: Schema.Array(WebProcessedUrlStatusEntrySchema),
   cursor: Schema.NullOr(Schema.String),
   metrics: WebTaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),

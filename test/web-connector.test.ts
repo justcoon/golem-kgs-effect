@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import {
   extractContent,
@@ -408,7 +408,7 @@ describe("Web Connector & Ingestion Subsystem", () => {
             url: "https://learn.golem.cloud/docs/intro",
             etag: '"abc-123"',
             lastModified: "2026-09-01T00:00:00Z",
-            contentHash: "sha256:hash1",
+            syncedAt: "2026-09-09T18:00:00.000Z",
           },
         ],
         cursor: null,
@@ -454,8 +454,6 @@ describe("Web Connector & Ingestion Subsystem", () => {
 
     it("should decode WebProcessedUrlEntrySchema and WebTaskMetricsSchema", () => {
       const urlEntry = {
-        url: "https://learn.golem.cloud/docs",
-        contentHash: "abc123hash",
         etag: '"etag-1"',
         lastModified: "Wed, 21 Oct 2025 07:28:00 GMT",
         syncedAt: "2026-09-09T18:00:00.000Z",
@@ -463,8 +461,9 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const decodedEntry = Schema.decodeUnknownSync(WebProcessedUrlEntrySchema)(
         urlEntry,
       );
-      assert.equal(decodedEntry.url, "https://learn.golem.cloud/docs");
-      assert.equal(decodedEntry.contentHash, "abc123hash");
+      assert.equal(decodedEntry.etag, '"etag-1"');
+      assert.equal(decodedEntry.lastModified, "Wed, 21 Oct 2025 07:28:00 GMT");
+      assert.equal(decodedEntry.syncedAt, "2026-09-09T18:00:00.000Z");
 
       const metrics = {
         totalDiscovered: 42,
@@ -684,6 +683,81 @@ describe("Web Connector & Ingestion Subsystem", () => {
       assert.equal(events.length, 1);
       assert.equal(events[0]?.notModified, true);
       assert.equal(events[0]?.hasDoc, false);
+    });
+
+    it("should emit CrawledPageEvents via crawlStream and collect them via Stream.runCollect", async () => {
+      const mockClient = HttpClient.make((req) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Streamed Page</title></head><body><p>Hello Stream</p></body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html", etag: `"etag-1"` },
+              },
+            ),
+          ),
+        ),
+      );
+
+      const connector = new WebPageConnector(
+        {
+          name: "test-stream",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com"],
+        },
+        mockClient,
+      );
+
+      const eventsChunk = await Effect.runPromise(
+        Stream.runCollect(connector.crawlStream()),
+      );
+      const events = Array.from(eventsChunk);
+
+      assert.equal(events.length, 1);
+      assert.equal(events[0]?.url, "https://example.com");
+      assert.equal(events[0]?.notModified, false);
+      assert.ok(Option.isSome(events[0]?.document));
+      assert.equal(events[0]?.document.value.title, "Streamed Page");
+      assert.equal(events[0]?.etag, `"etag-1"`);
+    });
+
+    it("should account for page failures accurately in crawlOnTheFly without phantom synced increments", async () => {
+      const mockClient = HttpClient.make((req) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Fail Test</title></head><body><p>Text</p></body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              },
+            ),
+          ),
+        ),
+      );
+
+      const connector = new WebPageConnector(
+        {
+          name: "test-fail",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com"],
+        },
+        mockClient,
+      );
+
+      // onPage fails with an error
+      const stats = await Effect.runPromise(
+        connector.crawlOnTheFly(Option.none(), () =>
+          Effect.fail(new Error("Database indexing failed")),
+        ),
+      );
+
+      assert.equal(stats.discovered, 1);
+      assert.equal(stats.synced, 0); // Must NOT be incremented
+      assert.equal(stats.failed, 1); // Must be incremented
     });
   });
 });
