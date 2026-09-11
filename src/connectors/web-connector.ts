@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { NodeHtmlMarkdown } from "node-html-markdown";
 import { Context, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import {
@@ -11,7 +12,7 @@ import {
 import {
   type WebResourceTarget,
   type HttpHeader,
-  ResourcesConfigValues,
+  WebResourcesConfig,
 } from "../config/schema.js";
 import {
   type RawDocument,
@@ -97,16 +98,26 @@ export function parseSitemapXml(
 }
 
 /**
- * Sanitizes and extracts clean readable text from HTML body.
- * Strips script, style, comments, header, footer, nav, aside.
- * Preserves paragraphs, headings, and breaks with newlines.
  * Decodes common HTML entities.
- * (Adapted from https://github.com/justcoon/golem-web-crawler-effect/blob/main/src/fetcher-agent.ts)
  */
-export function extractTextFromHtml(body: string): string {
-  let text = body;
+export function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'");
+}
 
-  // Remove scripts, styles, noscript, iframes, and comments
+/**
+ * Strips script, style, comments, and non-content chrome elements
+ * (headers, footers, navs, asides, buttons, forms, svgs, accessibility hidden tags).
+ */
+export function stripHtmlChrome(html: string): string {
+  let text = html;
   text = text.replace(
     /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
     " ",
@@ -121,60 +132,232 @@ export function extractTextFromHtml(body: string): string {
     " ",
   );
   text = text.replace(/<!--[\s\S]*?-->/g, " ");
-
-  // Strip non-content chrome elements (headers, footers, navs, asides, buttons, forms, svgs)
   text = text.replace(
-    /<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi,
+    /<(header|footer|nav|aside|button|form|svg)\b[^<]*(?:(?!<\/\1>)<[^<]*)*<\/\1>/gi,
     " ",
   );
-  text = text.replace(
-    /<footer\b[^<]*(?:(?!<\/footer>)<[^<]*)*<\/footer>/gi,
-    " ",
-  );
-  text = text.replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, " ");
-  text = text.replace(/<aside\b[^<]*(?:(?!<\/aside>)<[^<]*)*<\/aside>/gi, " ");
-  text = text.replace(
-    /<button\b[^<]*(?:(?!<\/button>)<[^<]*)*<\/button>/gi,
-    " ",
-  );
-  text = text.replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, " ");
-  text = text.replace(/<form\b[^<]*(?:(?!<\/form>)<[^<]*)*<\/form>/gi, " ");
   text = text.replace(
     /<[^>]+\b(role=["'](?:navigation|banner|contentinfo|search|menu)["']|aria-hidden=["']true["'])[^>]*>.*?<\/[^>]+>/gi,
     " ",
   );
+  return text;
+}
 
-  // Structural conversions to newlines
-  text = text.replace(/<\/(p|div|section|article|blockquote)>/gi, "\n\n");
+/**
+ * Sanitizes and extracts clean, semantic Markdown from HTML body.
+ * Strips script, style, comments, header, footer, nav, aside, buttons, forms, svgs.
+ * Preserves Markdown headings (#, ##, ...), lists (- item), code blocks (```),
+ * inline code (`code`), blockquotes (> quote), links ([text](url)), tables,
+ * and bold/italic emphasis.
+ */
+export function extractMarkdownFromHtml(
+  body: string,
+  baseUrl?: string,
+): string {
+  // 1 & 2. Remove scripts, styles, noscript, iframes, comments, and chrome elements
+  let text = stripHtmlChrome(body);
+
+  // 3. Preformatted / Code blocks
   text = text.replace(
-    /<h([1-6])\b[^>]*>(.*?)<\/h\1>/gi,
-    (_, _level, heading) => `\n\n${heading}\n\n`,
+    /<pre\b[^>]*><code\b[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
+    (_, code) => `\n\n\`\`\`\n${decodeHtmlEntities(code).trim()}\n\`\`\`\n\n`,
   );
-  text = text.replace(/<li\b[^>]*>(.*?)<\/li>/gi, "- $1\n");
-  text = text.replace(/<br\s*\/?>/gi, "\n");
-  text = text.replace(/<\/td>/gi, " ");
-  text = text.replace(/<\/tr>/gi, "\n");
+  text = text.replace(
+    /<pre\b[^>]*>([\s\S]*?)<\/pre>/gi,
+    (_, code) => `\n\n\`\`\`\n${decodeHtmlEntities(code).trim()}\n\`\`\`\n\n`,
+  );
+  text = text.replace(
+    /<code\b[^>]*>([\s\S]*?)<\/code>/gi,
+    (_, code) => `\`${decodeHtmlEntities(code).trim()}\``,
+  );
 
-  // Strip remaining HTML tags
+  // 4. Headings: <h1-6> -> Markdown #
+  text = text.replace(
+    /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi,
+    (_, level, heading) => {
+      const hashes = "#".repeat(Number(level));
+      const cleanHeading = heading.replace(/<[^>]+>/g, " ").trim();
+      return `\n\n${hashes} ${cleanHeading}\n\n`;
+    },
+  );
+
+  // 5. Blockquotes
+  text = text.replace(
+    /<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi,
+    (_, quote) => {
+      const inner = quote.replace(/<[^>]+>/g, " ").trim();
+      const lines = inner
+        .split("\n")
+        .map((l: string) => l.trim())
+        .filter((l: string) => l.length > 0);
+      return `\n\n` + lines.map((l: string) => `> ${l}`).join("\n") + `\n\n`;
+    },
+  );
+
+  // 6. Tables: Basic table conversion to Markdown
+  text = text.replace(
+    /<table\b[^>]*>([\s\S]*?)<\/table>/gi,
+    (_, tableContent) => {
+      const rows: string[] = [];
+      const trRegex = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+      let trMatch: RegExpExecArray | null;
+      let isFirstRow = true;
+
+      while ((trMatch = trRegex.exec(tableContent)) !== null) {
+        const rowInner = trMatch[1];
+        if (!rowInner) continue;
+        const cells: string[] = [];
+        const isHeaderRow = /<th\b/i.test(rowInner);
+        const cellRegex = /<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/gi;
+        let cellMatch: RegExpExecArray | null;
+
+        while ((cellMatch = cellRegex.exec(rowInner)) !== null) {
+          const rawCell = cellMatch[1];
+          if (!rawCell) continue;
+          const cellText = rawCell
+            .replace(/<[^>]+>/g, " ")
+            .trim()
+            .replace(/\|/g, "\\|");
+          cells.push(cellText);
+        }
+
+        if (cells.length > 0) {
+          rows.push(`| ${cells.join(" | ")} |`);
+          if (isFirstRow && isHeaderRow) {
+            rows.push(`| ${cells.map(() => "---").join(" | ")} |`);
+          }
+        }
+        isFirstRow = false;
+      }
+
+      return rows.length > 0 ? `\n\n${rows.join("\n")}\n\n` : "";
+    },
+  );
+
+  // 7. Lists
+  text = text.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_, item) => {
+    const cleanItem = item.replace(/<[^>]+>/g, " ").trim();
+    return cleanItem.length > 0 ? `- ${cleanItem}\n` : "";
+  });
+
+  // 8. Hyperlinks: <a href="...">text</a>
+  text = text.replace(
+    /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    (_, href, anchorText) => {
+      const cleanAnchor = anchorText.replace(/<[^>]+>/g, " ").trim();
+      if (!cleanAnchor) return "";
+      const rawHref = href.trim();
+      if (
+        !rawHref ||
+        rawHref.startsWith("#") ||
+        rawHref.startsWith("javascript:") ||
+        rawHref.startsWith("mailto:") ||
+        rawHref.startsWith("tel:")
+      ) {
+        return cleanAnchor;
+      }
+      let resolved = rawHref;
+      if (baseUrl) {
+        const opt = resolveUrl(baseUrl, rawHref);
+        if (Option.isSome(opt)) {
+          resolved = opt.value.toString();
+        }
+      }
+      return `[${cleanAnchor}](${resolved})`;
+    },
+  );
+
+  // 9. Bold and Italic formatting
+  text = text.replace(
+    /<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi,
+    "**$1**",
+  );
+  text = text.replace(/<(?:em|i)\b[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, "*$1*");
+
+  // 10. Horizontal rules and line breaks
+  text = text.replace(/<hr\s*\/?>/gi, "\n\n---\n\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+
+  // 11. Structural conversions to newlines
+  text = text.replace(/<\/(p|div|section|article|main)>/gi, "\n\n");
+
+  // 12. Strip remaining HTML tags
   text = text.replace(/<[^>]+>/g, " ");
 
-  // Decode common HTML entities
-  text = text
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&#160;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x27;/gi, "'");
+  // 13. Decode common HTML entities
+  text = decodeHtmlEntities(text);
 
-  // Clean whitespace
-  return text
+  // 14. Normalize whitespace while preserving markdown structure and code blocks
+  const lines = text.split("\n");
+  let inCodeBlock = false;
+  const processedLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      processedLines.push(line.trim());
+      continue;
+    }
+    if (inCodeBlock) {
+      processedLines.push(line);
+    } else {
+      const trimmed = line.trim().replace(/[ \t]+/g, " ");
+      processedLines.push(trimmed);
+    }
+  }
+
+  return processedLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Backward-compatible alias for extractMarkdownFromHtml.
+ */
+export const extractTextFromHtml = extractMarkdownFromHtml;
+
+/**
+ * Converts HTML into Markdown using the `node-html-markdown` package.
+ * Pre-cleans layout chrome, headers, footers, navigation, and scripts first.
+ */
+export function extractMarkdownWithNodeHtmlMarkdown(
+  body: string,
+  baseUrl?: string,
+): string {
+  let cleaned = stripHtmlChrome(body);
+  if (baseUrl) {
+    cleaned = cleaned.replace(
+      /<a\b([^>]*?)href=["']([^"']+)["']([^>]*?)>/gi,
+      (full, pre, href, post) => {
+        const rawHref = href.trim();
+        if (
+          !rawHref ||
+          rawHref.startsWith("#") ||
+          rawHref.startsWith("javascript:") ||
+          rawHref.startsWith("mailto:") ||
+          rawHref.startsWith("tel:")
+        ) {
+          return full;
+        }
+        const opt = resolveUrl(baseUrl, rawHref);
+        if (Option.isSome(opt)) {
+          return `<a${pre}href="${opt.value.toString()}"${post}>`;
+        }
+        return full;
+      },
+    );
+  }
+  const markdown = NodeHtmlMarkdown.translate(cleaned, {
+    bulletMarker: "-",
+    codeBlockStyle: "fenced",
+  });
+  return markdown
     .split("\n")
-    .map((line) => line.trim().replace(/[ \t]+/g, " "))
-    .filter((line) => line.length > 0)
-    .join("\n\n");
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**
@@ -311,7 +494,10 @@ export function extractContent(
     }
   }
 
-  const extractedText = extractTextFromHtml(body);
+  const extractedText = extractMarkdownWithNodeHtmlMarkdown(
+    body,
+    resolvedBaseUrl,
+  );
 
   return {
     title,
@@ -753,7 +939,7 @@ export class WebConnectorService extends Context.Service<
   static readonly Live = Layer.effect(
     WebConnectorService,
     Effect.gen(function* () {
-      const resourcesConfig = yield* ResourcesConfigValues;
+      const resourcesConfig = yield* WebResourcesConfig;
       const httpClient = yield* HttpClient.HttpClient;
 
       return {

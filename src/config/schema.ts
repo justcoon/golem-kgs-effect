@@ -77,12 +77,28 @@ export const ResourcesConfigFields = {
 export const ResourcesConfigSchema = Schema.Struct(ResourcesConfigFields);
 export type ResourcesConfigSchema = typeof ResourcesConfigSchema.Type;
 
-export interface ResourcesConfigShape {
+export interface S3ResourcesConfigShape {
   readonly s3: Record<string, S3ResourceTarget>;
-  readonly web: Record<string, WebResourceTarget>;
   readonly getS3Resource: (name: string) => Option.Option<S3ResourceTarget>;
+}
+
+export class S3ResourcesConfig extends Context.Service<
+  S3ResourcesConfig,
+  S3ResourcesConfigShape
+>()("app/config/S3ResourcesConfig") {}
+
+export interface WebResourcesConfigShape {
+  readonly web: Record<string, WebResourceTarget>;
   readonly getWebResource: (name: string) => Option.Option<WebResourceTarget>;
 }
+
+export class WebResourcesConfig extends Context.Service<
+  WebResourcesConfig,
+  WebResourcesConfigShape
+>()("app/config/WebResourcesConfig") {}
+
+export interface ResourcesConfigShape
+  extends S3ResourcesConfigShape, WebResourcesConfigShape {}
 
 export class ResourcesConfigValues extends Context.Service<
   ResourcesConfigValues,

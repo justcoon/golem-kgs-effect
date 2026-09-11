@@ -13,6 +13,7 @@ import {
   fuseRankings,
   formatContextPrompt,
   GraphRAGService,
+  synthesizeAnswerText,
 } from "../src/pipeline/index.js";
 import {
   ChunkRepository,
@@ -30,6 +31,7 @@ import { type Entity } from "../src/domain/entity.js";
 import { type Edge } from "../src/domain/relationship.js";
 import {
   type GraphPath,
+  type GraphRAGContextBundle,
   type NeighborhoodQuery,
   type PathFindingQuery,
   type SearchResultItem,
@@ -484,6 +486,200 @@ describe("Phase 5 Search Engine & GraphRAG Retrieval", () => {
       assert.ok(formatted.includes("No relevant document excerpts found."));
       assert.ok(formatted.includes("No knowledge graph entities found."));
       assert.ok(formatted.includes("No knowledge graph relationships found."));
+    });
+
+    it("should synthesize structured markdown answer with entities, relationships, and clean evidence", () => {
+      const bundle: GraphRAGContextBundle = {
+        query: "How does Golem work with Effect?",
+        entities: [
+          {
+            id: "ent_golem",
+            name: "Golem Cloud",
+            entityType: "TECHNOLOGY",
+            description: "Durable computing platform",
+            properties: { language: "Rust" },
+            metadata: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: "ent_effect",
+            name: "Effect TS",
+            entityType: "TECHNOLOGY",
+            description: "Functional TypeScript runtime",
+            properties: {},
+            metadata: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+        relationships: [
+          {
+            sourceId: "ent_golem",
+            targetId: "ent_effect",
+            relationType: "INTEGRATES_WITH",
+            weight: 1.0,
+            confidence: 0.95,
+            properties: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+        relevantChunks: [
+          {
+            chunkId: "chunk_101",
+            documentId: "doc_arch",
+            content:
+              "[Context: Architecture > Durability]\nGolem Cloud provides durable serverless workflows.\n\n- Automatic checkpointing and replay\n- Native TypeScript and Effect SDK integration",
+            score: 0.88,
+            metadata: {},
+          },
+        ],
+        formattedContextPrompt: "",
+        metadata: {
+          totalEntities: 2,
+          totalRelationships: 1,
+          totalChunks: 1,
+          retrievalDurationMs: 5,
+        },
+      };
+
+      const answer = synthesizeAnswerText(bundle.query, bundle);
+
+      // Markdown assertions
+      assert.ok(
+        answer.includes("Golem Cloud provides durable serverless workflows."),
+      );
+      assert.ok(answer.includes("- Automatic checkpointing and replay"));
+      assert.ok(!answer.includes("[Context: Architecture > Durability]")); // internal breadcrumb stripped
+      assert.ok(answer.includes("### Key Entities"));
+      assert.ok(
+        answer.includes(
+          "- **Golem Cloud** (*TECHNOLOGY*) — Durable computing platform",
+        ),
+      );
+      assert.ok(answer.includes("### Knowledge Graph Insights"));
+      assert.ok(
+        answer.includes("- **Golem Cloud** *integrates with* **Effect TS**"),
+      );
+    });
+
+    it("should sanitize truncated syntax fragments, unclosed backticks, UUID descriptions, and deduplicate relationships", () => {
+      const messyBundle: GraphRAGContextBundle = {
+        query: "agent metadata",
+        entities: [
+          {
+            id: "ent_promises",
+            name: "Golem Promises",
+            entityType: "CONCEPT",
+            description: "Extracted from 555f2332-2e20-5cf2-9ea3-2487ec8187c3",
+            properties: {},
+            metadata: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: "ent_cloud",
+            name: "Golem Cloud",
+            entityType: "TECHNOLOGY",
+            description: "Distributed execution platform",
+            properties: {},
+            metadata: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: "ent_yaml",
+            name: "golem.yaml",
+            entityType: "FILE",
+            description: "Application manifest",
+            properties: {},
+            metadata: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+        relationships: [
+          {
+            sourceId: "ent_cloud",
+            targetId: "ent_yaml",
+            relationType: "CO_OCCURS_WITH",
+            weight: 0.9,
+            confidence: 0.9,
+            properties: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            // Duplicate relation in reverse direction
+            sourceId: "ent_yaml",
+            targetId: "ent_cloud",
+            relationType: "CO_OCCURS_WITH",
+            weight: 0.9,
+            confidence: 0.9,
+            properties: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+        relevantChunks: [
+          {
+            id: "chunk_cut",
+            documentId: "doc_1",
+            chunkIndex: 0,
+            content:
+              ": bigint;\n  /** The environment the agent belongs to */\n  environmentId: EnvironmentId;\n};`\n\nThere are two exported functions to query agent metadata:\n\n- `getSelfMetadata()` returns the metadata for the current agent\n- `getAgentMetadata(agentId: AgentId)` returns the metadata for a specific agent given by its `AgentId`, or `undefined` if it does not exist",
+            startOffset: 0,
+            endOffset: 250,
+            tokenCount: 60,
+            embedding: [],
+            metadata: {},
+          },
+        ],
+        formattedContextPrompt: "",
+        metadata: {
+          totalEntities: 3,
+          totalRelationships: 2,
+          totalChunks: 1,
+          retrievalDurationMs: 4,
+        },
+      };
+
+      const answer = synthesizeAnswerText(messyBundle.query, messyBundle);
+
+      // The broken type fragment should be filtered out
+      assert.ok(!answer.includes(": bigint;"));
+      assert.ok(!answer.includes("environmentId: EnvironmentId;"));
+
+      // Clean markdown content should be preserved
+      assert.ok(
+        answer.includes(
+          "There are two exported functions to query agent metadata:",
+        ),
+      );
+      assert.ok(
+        answer.includes(
+          "- `getSelfMetadata()` returns the metadata for the current agent",
+        ),
+      );
+
+      // Extraction provenance should be omitted, but type badge retained
+      assert.ok(answer.includes("- **Golem Promises** (*CONCEPT*)"));
+      assert.ok(!answer.includes("Extracted from 555f2332"));
+
+      // Real description should be preserved
+      assert.ok(
+        answer.includes(
+          "- **Golem Cloud** (*TECHNOLOGY*) — Distributed execution platform",
+        ),
+      );
+
+      // CO_OCCURS_WITH should be transformed to "associated with" and deduplicated
+      assert.ok(
+        answer.includes("- **Golem Cloud** *associated with* **golem.yaml**"),
+      );
+      const matches = answer.match(/associated with/g);
+      assert.equal(matches?.length, 1);
     });
   });
 

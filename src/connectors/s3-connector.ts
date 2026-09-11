@@ -16,10 +16,7 @@ import {
   parseListBucketResultXml,
   signS3Request,
 } from "./s3-signer.js";
-import {
-  type S3ResourceTarget,
-  ResourcesConfigValues,
-} from "../config/schema.js";
+import { type S3ResourceTarget, S3ResourcesConfig } from "../config/schema.js";
 import {
   type RawDocument,
   type ProvenanceRecord,
@@ -392,7 +389,7 @@ export class S3ConnectorService extends Context.Service<
     S3ConnectorService,
     Effect.gen(function* () {
       const httpClient = yield* HttpClient.HttpClient;
-      const resourcesConfig = yield* ResourcesConfigValues;
+      const resourcesConfig = yield* S3ResourcesConfig;
 
       return {
         createConnector: (

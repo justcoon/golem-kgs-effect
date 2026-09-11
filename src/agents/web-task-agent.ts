@@ -7,7 +7,7 @@ import {
   type WebTaskStatusResponse,
 } from "./types.js";
 import { AppAgentConfig } from "../config/agent-config.js";
-import { makeAgentPipelineLayer } from "./agent-pipeline-layer.js";
+import { makeWebTaskAgentLayer } from "./agent-pipeline-layer.js";
 import { runWebIngestion } from "../pipeline/web-ingestion-pipeline.js";
 
 const toStatusResponse = (s: WebTaskState): WebTaskStatusResponse => ({
@@ -61,7 +61,7 @@ export const WebIngestorTaskAgent = defineAgent({
 }).implement(({ resourceName }, snapshot) =>
   Effect.gen(function* () {
     const config = yield* AppAgentConfig;
-    const pipelineLayer = yield* makeAgentPipelineLayer(config);
+    const pipelineLayer = yield* makeWebTaskAgentLayer(config);
 
     const state = yield* snapshot.init({
       resourceName,

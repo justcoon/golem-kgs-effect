@@ -58,7 +58,7 @@ flowchart TD
 | **Golem Cloud Runtime**          | WebAssembly host providing durable execution, automatic state recovery, transactional retry, and native HTTP routing.                                  |
 | **PostgreSQL + pgvector**        | Persistent store for raw documents, text chunks, vector embeddings, entities, graph edges, and sync checkpoints (`@golemcloud/effect-golem/postgres`). |
 | **S3 Storage (RustFS / AWS S3)** | Source document repositories scanned incrementally using ETag and timestamp checkpoints with AWS SigV4 authorization.                                  |
-| **Web / Documentation Sitemaps** | Public documentation sites and web pages discovered via `sitemap.xml` or seed URLs, fetched with native outbound HTTP and pure-TS HTML parsing (no native dependencies). |
+| **Web / Documentation Sitemaps** | Public documentation sites and web pages discovered via `sitemap.xml` or seed URLs, fetched with native outbound HTTP and converted to semantic Markdown via `node-html-markdown` (preserving headings, lists, code blocks, tables, and resolved links). |
 | **Ollama Embeddings**            | Generates 768-dimensional dense vector embeddings (`nomic-embed-text`) via OpenAI-compatible endpoints.                                                |
 
 ---
@@ -73,7 +73,7 @@ The ingestion pipeline converts source documents into a dual-representation know
 flowchart TD
     subgraph Ingress["1. Document Ingress"]
         S3["S3 Bucket / Object Storage"] -->|"Fetch markdown object"| RawDoc["Raw Document<br/>(RFC 4122 UUID v5, source, resourceName, sourceKey)"]
-        Web["Public Web / Sitemaps"] -->|"Fetch HTML & clean text"| RawDoc
+        Web["Public Web / Sitemaps"] -->|"Fetch HTML & convert to Markdown"| RawDoc
         RawDoc -->|"Save record"| DocDB[("PostgreSQL: documents table<br/>(Satisfies FK constraint for chunks)")]
     end
 
@@ -146,7 +146,7 @@ flowchart TD
 
 #### Key Pipeline Stages:
 
-1. **Raw Document Ingress**: S3 objects (Markdown files) or public web pages (fetched via HTTP, stripped of boilerplate navigation, scripts, and styles with pure-TS parsing) are assigned an RFC 4122 UUID v5 derived deterministically from `(source, resourceName, sourceKey)`. The document is persisted in the `documents` table first to satisfy foreign key constraints.
+1. **Raw Document Ingress**: S3 objects (Markdown files) or public web pages (fetched via HTTP, stripped of navigation chrome and scripts, and converted to structured Markdown preserving heading hierarchies, lists, and tables via `node-html-markdown`) are assigned an RFC 4122 UUID v5 derived deterministically from `(source, resourceName, sourceKey)`. The document is persisted in the `documents` table first to satisfy foreign key constraints.
 2. **Semantic Chunking**: Documents are split into semantic chunks respecting Markdown section hierarchy. Each chunk captures hierarchical heading breadcrumbs (e.g. `Architecture > Storage > Postgres`) for contextual relevance.
 3. **LLM Embedding Invocation**: Chunk text is sent to an embedding model (e.g. `nomic-embed-text` via Ollama or OpenAI-compatible endpoint) generating normalized 768-dimensional vector embeddings.
 4. **Entity & Relation Extraction**: Text chunks are parsed to identify domain entities, technology terms, acronyms, and semantic relationships using regex rules and linguistic patterns.
@@ -192,7 +192,7 @@ Dedicated worker agent executing the ETL pipeline for a specific storage target 
 
 Dedicated worker agent executing the ETL pipeline for public web targets and documentation sitemaps (`golem-docs`, `effect-specs`).
 
-- **`POST /api/ingestion/web/{resourceName}/sync`**: Discovers pages via `sitemap.xml` or seed URLs, fetches HTML, cleans text/markdown, computes embeddings, extracts entities/relations, and commits to PostgreSQL.
+- **`POST /api/ingestion/web/{resourceName}/sync`**: Discovers pages via `sitemap.xml` or seed URLs, fetches HTML, converts content to semantic Markdown preserving heading hierarchies, computes embeddings, extracts entities/relations, and commits to PostgreSQL.
 - **`GET /api/ingestion/web/{resourceName}/status`**: Returns current sync metrics, processed URLs, ETags, and timestamps.
 - **`POST /api/ingestion/web/{resourceName}/reset`**: Clears sync cursor to force a full re-index.
 
@@ -200,7 +200,7 @@ Dedicated worker agent executing the ETL pipeline for public web targets and doc
 
 High-throughput query and retrieval interface exposing GraphRAG search, entity resolution, and graph traversal endpoints. Configured with `mode: "ephemeral"` for high concurrency.
 
-- **`POST /api/knowledge/ask`**: GraphRAG question-answering with hybrid retrieval, multi-hop entity graph traversal, and answer synthesis with citations.
+- **`POST /api/knowledge/ask`**: GraphRAG question-answering with hybrid retrieval, multi-hop entity graph traversal, and polished GitHub-Flavored Markdown answer synthesis (syntax-fragment sanitization, balanced code fences, entity badges, and relationship insights).
 - **`POST /api/knowledge/graphrag`**: Context retrieval bundle for external LLM generation containing ranked chunks, canonical entities, relationships, and assembled context prompt.
 - **`POST /api/knowledge/search`**: Hybrid search combining pgvector cosine distance and full-text search fused via Reciprocal Rank Fusion (RRF, $k=60$).
 - **`POST /api/knowledge/entities/search`**: Entity search and autocomplete by prefix, name, alias, or keyword. Automatically returns top connected graph hubs when `query` is empty or omitted.
@@ -601,6 +601,8 @@ curl -X POST 'http://localhost:9006/api/coordinator/sync' \
 ```
 
 ### GraphRAG Question Answering
+
+Returns synthesized answers formatted in clean GitHub-Flavored Markdown with citations, key entity highlights, and relationship insights ready for rich display in frontend and MCP clients.
 
 ```bash
 curl -s --url 'http://localhost:9006/api/knowledge/ask' \
