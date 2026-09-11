@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Effect, Option, Schema } from "effect";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import {
   extractContent,
   extractMarkdownFromHtml,
@@ -516,11 +516,15 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const mockClient = HttpClient.make((req) => {
         const body = mockHtml[req.url] ?? "<html><body>Not Found</body></html>";
         const status = mockHtml[req.url] ? 200 : 404;
-        return Effect.succeed({
-          status,
-          headers: { "content-type": "text/html" },
-          text: Effect.succeed(body),
-        } as any);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(body, {
+              status,
+              headers: { "content-type": "text/html" },
+            }),
+          ),
+        );
       });
 
       const connector = new WebPageConnector(
@@ -549,6 +553,68 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const doc = await Effect.runPromise(connector.fetch(items[1]!));
       assert.equal(doc.document.title, "Develop on Golem");
       assert.ok(doc.document.content.includes("Develop on Golem"));
+    });
+
+    it("should use WebPageConnector.make with Effect Cache to deduplicate fetch HTTP requests", async () => {
+      let httpRequestsCount = 0;
+      const testHtml =
+        "<html><head><title>Cached Page</title></head><body><p>Hello Effect Cache</p></body></html>";
+
+      const countingClient = HttpClient.make((req) => {
+        httpRequestsCount++;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(testHtml, {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            }),
+          ),
+        );
+      });
+
+      const connector = await Effect.runPromise(
+        WebPageConnector.make(
+          {
+            name: "test-cache",
+            baseUrl: "https://example.com",
+            seedUrls: ["https://example.com"],
+          },
+          countingClient,
+        ),
+      );
+
+      const item = {
+        id: "https://example.com",
+        uri: "https://example.com",
+        sizeBytes: 0,
+        lastModified: new Date(),
+        metadata: { resourceName: "test-cache" },
+      };
+
+      // First fetch: should trigger 1 HTTP request via Cache lookup
+      const doc1 = await Effect.runPromise(connector.fetch(item));
+      assert.equal(doc1.document.title, "Cached Page");
+      assert.equal(httpRequestsCount, 1);
+
+      // Second fetch: should hit Effect Cache without issuing another HTTP request
+      const doc2 = await Effect.runPromise(connector.fetch(item));
+      assert.equal(doc2.document.title, "Cached Page");
+      assert.equal(httpRequestsCount, 1);
+
+      // Third fetch on another URI: triggers a second HTTP request
+      const item2 = {
+        ...item,
+        id: "https://example.com/other",
+        uri: "https://example.com/other",
+      };
+      const doc3 = await Effect.runPromise(connector.fetch(item2));
+      assert.equal(doc3.document.title, "Cached Page");
+      assert.equal(httpRequestsCount, 2);
+
+      // Re-fetch item2: should hit cache
+      await Effect.runPromise(connector.fetch(item2));
+      assert.equal(httpRequestsCount, 2);
     });
   });
 });

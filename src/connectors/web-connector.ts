@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { Context, Effect, Layer, Option } from "effect";
+import { Cache, Context, Duration, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import {
   ConnectorError,
@@ -642,6 +642,14 @@ export function fetchPageContent(
   });
 }
 
+export interface PageResponse {
+  readonly body: string;
+  readonly finalUrl: string;
+  readonly status: number;
+  readonly etag?: string;
+  readonly lastModified?: string;
+}
+
 /**
  * Web Page / Documentation Source Connector implementation.
  */
@@ -652,22 +660,43 @@ export class WebPageConnector implements SourceConnector<
 > {
   readonly id: string;
   readonly source = "web";
-  private readonly pageCache = new Map<
-    string,
-    {
-      body: string;
-      finalUrl: string;
-      status: number;
-      etag?: string;
-      lastModified?: string;
-    }
-  >();
+  private readonly pageCache: Cache.Cache<string, PageResponse, ConnectorError>;
 
   constructor(
     readonly target: WebResourceTarget,
     private readonly httpClient: HttpClient.HttpClient,
+    pageCache?: Cache.Cache<string, PageResponse, ConnectorError>,
   ) {
     this.id = `web:${target.name}`;
+    this.pageCache =
+      pageCache ??
+      Effect.runSync(WebPageConnector.createDefaultCache(target, httpClient));
+  }
+
+  static createDefaultCache(
+    target: WebResourceTarget,
+    httpClient: HttpClient.HttpClient,
+  ): Effect.Effect<Cache.Cache<string, PageResponse, ConnectorError>> {
+    const capacity = target.maxPages ? Math.max(target.maxPages, 256) : 256;
+    return Cache.make({
+      capacity,
+      timeToLive: Duration.minutes(60),
+      lookup: (url: string) =>
+        fetchPageContent(url, httpClient, target.headers),
+    });
+  }
+
+  static make(
+    target: WebResourceTarget,
+    httpClient: HttpClient.HttpClient,
+  ): Effect.Effect<WebPageConnector> {
+    return Effect.gen(function* () {
+      const pageCache = yield* WebPageConnector.createDefaultCache(
+        target,
+        httpClient,
+      );
+      return new WebPageConnector(target, httpClient, pageCache);
+    });
   }
 
   connect(): Effect.Effect<void, ConnectorError> {
@@ -746,16 +775,17 @@ export class WebPageConnector implements SourceConnector<
         while (queue.length > 0 && discoveredUrls.length < maxPages) {
           const currentUrl = queue.shift()!;
 
-          const fetchOpt = yield* Effect.option(
-            fetchPageContent(currentUrl, httpClient, target.headers),
+          const fetchOpt = yield* Cache.get(pageCache, currentUrl).pipe(
+            Effect.option,
           );
 
           if (Option.isNone(fetchOpt)) continue;
           const pageRes = fetchOpt.value;
 
-          // Cache page content so fetch(item) avoids duplicate HTTP calls
-          pageCache.set(pageRes.finalUrl, pageRes);
-          pageCache.set(currentUrl, pageRes);
+          // Cache page content under finalUrl as well if redirect occurred
+          if (pageRes.finalUrl !== currentUrl) {
+            yield* Cache.set(pageCache, pageRes.finalUrl, pageRes);
+          }
 
           // If the page matches includePatterns or is one of initial seeds, keep it
           const isSeed =
@@ -849,14 +879,10 @@ export class WebPageConnector implements SourceConnector<
   fetch(
     item: DiscoveredItem,
   ): Effect.Effect<ExtractedDocument, ConnectorError> {
-    const { target, httpClient } = this;
+    const { target } = this;
     const pageCache = this.pageCache;
     return Effect.gen(function* () {
-      const cached = pageCache.get(item.uri) ?? pageCache.get(item.id);
-      const res =
-        cached !== undefined
-          ? cached
-          : yield* fetchPageContent(item.uri, httpClient, target.headers);
+      const res = yield* Cache.get(pageCache, item.uri);
 
       const content = extractContent(
         res.finalUrl,
@@ -954,7 +980,7 @@ export class WebConnectorService extends Context.Service<
                 }),
               );
             }
-            return new WebPageConnector(targetOpt.value, httpClient);
+            return yield* WebPageConnector.make(targetOpt.value, httpClient);
           }),
       };
     }),
