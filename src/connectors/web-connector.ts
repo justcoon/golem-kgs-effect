@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { Cache, Context, Duration, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import {
   ConnectorError,
@@ -508,27 +508,36 @@ export function extractContent(
 }
 
 /**
+ * Conditional request headers for HTTP caching and validation.
+ */
+export interface ConditionalHeaders {
+  readonly ifNoneMatch?: string;
+  readonly ifModifiedSince?: string;
+}
+
+export interface PageResponse {
+  readonly body: string;
+  readonly finalUrl: string;
+  readonly status: number;
+  readonly etag?: string;
+  readonly lastModified?: string;
+  readonly notModified?: boolean;
+}
+
+/**
  * Fetches page content following HTTP 3xx redirects (up to 5 hops).
- * (Adapted from https://github.com/justcoon/golem-web-crawler-effect/blob/main/src/fetcher-agent.ts)
+ * Supports conditional request headers and handles HTTP 304 Not Modified.
  */
 export function fetchPageContent(
   targetUrl: string,
   httpClient: HttpClient.HttpClient,
   customHeaders?: ReadonlyArray<HttpHeader> | Record<string, string>,
-): Effect.Effect<
-  {
-    body: string;
-    finalUrl: string;
-    status: number;
-    etag?: string;
-    lastModified?: string;
-  },
-  ConnectorError
-> {
+  conditionalHeaders?: ConditionalHeaders,
+  maxRedirects: number = 5,
+): Effect.Effect<PageResponse, ConnectorError> {
   return Effect.gen(function* () {
     let currentUrl = targetUrl;
     let redirectCount = 0;
-    const maxRedirects = 5;
     let status = 0;
     let body = "";
     let finalUrl = targetUrl;
@@ -559,6 +568,19 @@ export function fetchPageContent(
         }
       }
 
+      if (conditionalHeaders?.ifNoneMatch) {
+        request = HttpClientRequest.setHeader(
+          "If-None-Match",
+          conditionalHeaders.ifNoneMatch,
+        )(request);
+      }
+      if (conditionalHeaders?.ifModifiedSince) {
+        request = HttpClientRequest.setHeader(
+          "If-Modified-Since",
+          conditionalHeaders.ifModifiedSince,
+        )(request);
+      }
+
       const response = yield* HttpClient.execute(request).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.mapError(
@@ -574,6 +596,18 @@ export function fetchPageContent(
       status = response.status;
       etag = response.headers["etag"];
       lastModified = response.headers["last-modified"];
+
+      // Handle HTTP 304 Not Modified
+      if (status === 304) {
+        return {
+          body: "",
+          finalUrl: currentUrl,
+          status: 304,
+          etag,
+          lastModified,
+          notModified: true,
+        };
+      }
 
       if (status >= 300 && status <= 399) {
         if (redirectCount >= maxRedirects) {
@@ -638,14 +672,74 @@ export function fetchPageContent(
       break;
     }
 
-    return { body, finalUrl, status, etag, lastModified };
+    return { body, finalUrl, status, etag, lastModified, notModified: false };
   });
 }
 
-export interface PageResponse {
-  readonly body: string;
+/**
+ * Helper to extract markdown, clean chrome, and construct a RawDocument domain model.
+ */
+function buildRawDocument(
+  target: WebResourceTarget,
+  finalUrl: string,
+  originalUrl: string,
+  body: string,
+  status: number,
+  etag?: string,
+  lastModified?: string,
+): { document: RawDocument; outboundLinks: ReadonlyArray<string> } {
+  const content = extractContent(
+    finalUrl,
+    body,
+    target.includePatterns,
+    target.excludePatterns,
+  );
+
+  const docUuid = generateDocumentUuid("web", target.name, finalUrl);
+  const text =
+    content.extractedText.length > 0 ? content.extractedText : content.title;
+  const sizeBytes = Buffer.byteLength(text, "utf8");
+
+  const domain = tryParseUrl(finalUrl).pipe(
+    Option.map((u) => u.hostname),
+    Option.getOrElse(() => ""),
+  );
+
+  const doc: RawDocument = {
+    id: docUuid,
+    title: content.title || finalUrl,
+    content: text,
+    source: "web",
+    resourceName: target.name,
+    sourceKey: finalUrl,
+    sizeBytes,
+    metadata: {
+      url: finalUrl,
+      originalUrl,
+      domain,
+      canonicalUrl: content.canonicalUrl,
+      httpStatus: status,
+      etag,
+      lastModified,
+      contentHash: sha256Hex(text),
+    },
+    tags: ["web", target.name],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  return { document: doc, outboundLinks: content.extractedLinks };
+}
+
+/**
+ * Event emitted per page during on-the-fly streaming crawl.
+ */
+export interface CrawledPageEvent {
+  readonly url: string;
   readonly finalUrl: string;
-  readonly status: number;
+  readonly notModified: boolean;
+  readonly document: Option.Option<RawDocument>;
+  readonly outboundLinks: ReadonlyArray<string>;
   readonly etag?: string;
   readonly lastModified?: string;
 }
@@ -660,43 +754,19 @@ export class WebPageConnector implements SourceConnector<
 > {
   readonly id: string;
   readonly source = "web";
-  private readonly pageCache: Cache.Cache<string, PageResponse, ConnectorError>;
 
   constructor(
     readonly target: WebResourceTarget,
     private readonly httpClient: HttpClient.HttpClient,
-    pageCache?: Cache.Cache<string, PageResponse, ConnectorError>,
   ) {
     this.id = `web:${target.name}`;
-    this.pageCache =
-      pageCache ??
-      Effect.runSync(WebPageConnector.createDefaultCache(target, httpClient));
-  }
-
-  static createDefaultCache(
-    target: WebResourceTarget,
-    httpClient: HttpClient.HttpClient,
-  ): Effect.Effect<Cache.Cache<string, PageResponse, ConnectorError>> {
-    const capacity = target.maxPages ? Math.max(target.maxPages, 256) : 256;
-    return Cache.make({
-      capacity,
-      timeToLive: Duration.minutes(60),
-      lookup: (url: string) =>
-        fetchPageContent(url, httpClient, target.headers),
-    });
   }
 
   static make(
     target: WebResourceTarget,
     httpClient: HttpClient.HttpClient,
   ): Effect.Effect<WebPageConnector> {
-    return Effect.gen(function* () {
-      const pageCache = yield* WebPageConnector.createDefaultCache(
-        target,
-        httpClient,
-      );
-      return new WebPageConnector(target, httpClient, pageCache);
-    });
+    return Effect.succeed(new WebPageConnector(target, httpClient));
   }
 
   connect(): Effect.Effect<void, ConnectorError> {
@@ -721,11 +791,268 @@ export class WebPageConnector implements SourceConnector<
     });
   }
 
+  /**
+   * On-the-fly streaming crawl.
+   * Emits pages as they are discovered and fetched, releasing body memory immediately.
+   */
+  crawlOnTheFly<R = never>(
+    cursor: Option.Option<WebCursorData>,
+    onPage: (event: CrawledPageEvent) => Effect.Effect<void, unknown, R>,
+  ): Effect.Effect<
+    { discovered: number; synced: number; failed: number },
+    ConnectorError,
+    R
+  > {
+    const { target, httpClient } = this;
+    return Effect.gen(function* () {
+      const currentCursor = Option.getOrUndefined(cursor);
+      const processed = currentCursor?.processedUrls ?? {};
+
+      let discovered = 0;
+      let synced = 0;
+      let failed = 0;
+
+      // 1. If sitemapUrl is specified, attempt to fetch and parse it
+      if (target.sitemapUrl) {
+        const sitemapResult = yield* fetchPageContent(
+          target.sitemapUrl,
+          httpClient,
+          target.headers,
+        ).pipe(
+          Effect.map((res) => parseSitemapXml(res.body)),
+          Effect.catch(() => Effect.succeed([])),
+        );
+
+        for (const entry of sitemapResult) {
+          if (
+            !isUrlAllowed(
+              entry.loc,
+              target.includePatterns,
+              target.excludePatterns,
+            )
+          ) {
+            continue;
+          }
+          discovered++;
+          const existing = processed[entry.loc];
+
+          // If sitemap has lastmod and DB record matches, skip network request entirely
+          if (
+            existing &&
+            entry.lastmod &&
+            existing.lastModified === entry.lastmod
+          ) {
+            yield* onPage({
+              url: entry.loc,
+              finalUrl: entry.loc,
+              notModified: true,
+              document: Option.none(),
+              outboundLinks: [],
+              etag: existing.etag,
+              lastModified: existing.lastModified,
+            }).pipe(Effect.ignore);
+            synced++;
+            continue;
+          }
+
+          const fetchRes = yield* fetchPageContent(
+            entry.loc,
+            httpClient,
+            target.headers,
+            existing
+              ? {
+                  ifNoneMatch: existing.etag,
+                  ifModifiedSince: existing.lastModified,
+                }
+              : undefined,
+          ).pipe(Effect.option);
+
+          if (Option.isNone(fetchRes)) {
+            failed++;
+            continue;
+          }
+
+          const pageRes = fetchRes.value;
+          if (pageRes.notModified) {
+            yield* onPage({
+              url: entry.loc,
+              finalUrl: pageRes.finalUrl,
+              notModified: true,
+              document: Option.none(),
+              outboundLinks: [],
+              etag: pageRes.etag ?? existing?.etag,
+              lastModified: pageRes.lastModified ?? existing?.lastModified,
+            }).pipe(Effect.ignore);
+            synced++;
+            continue;
+          }
+
+          const { document, outboundLinks } = buildRawDocument(
+            target,
+            pageRes.finalUrl,
+            entry.loc,
+            pageRes.body,
+            pageRes.status,
+            pageRes.etag,
+            pageRes.lastModified,
+          );
+
+          yield* onPage({
+            url: entry.loc,
+            finalUrl: pageRes.finalUrl,
+            notModified: false,
+            document: Option.some(document),
+            outboundLinks,
+            etag: pageRes.etag,
+            lastModified: pageRes.lastModified,
+          }).pipe(Effect.ignore);
+          synced++;
+        }
+
+        if (discovered > 0) {
+          return { discovered, synced, failed };
+        }
+      }
+
+      // 2. If no sitemap or sitemap produced no URLs, crawl starting from seedUrls (or baseUrl)
+      const initialSeeds =
+        target.seedUrls && target.seedUrls.length > 0
+          ? target.seedUrls
+          : [target.baseUrl];
+
+      const baseHost = tryParseUrl(target.baseUrl).pipe(
+        Option.map((u) => u.hostname),
+        Option.getOrElse(() => ""),
+      );
+
+      const maxPages = target.maxPages ?? 100;
+      const queue: string[] = [...initialSeeds];
+      const visited = new Set<string>();
+
+      while (queue.length > 0 && discovered < maxPages) {
+        const currentUrl = queue.shift()!;
+        if (visited.has(currentUrl)) continue;
+        visited.add(currentUrl);
+
+        const existing = processed[currentUrl];
+        const fetchRes = yield* fetchPageContent(
+          currentUrl,
+          httpClient,
+          target.headers,
+          existing
+            ? {
+                ifNoneMatch: existing.etag,
+                ifModifiedSince: existing.lastModified,
+              }
+            : undefined,
+        ).pipe(Effect.option);
+
+        if (Option.isNone(fetchRes)) {
+          failed++;
+          continue;
+        }
+
+        const pageRes = fetchRes.value;
+        visited.add(pageRes.finalUrl);
+
+        if (pageRes.notModified) {
+          yield* onPage({
+            url: currentUrl,
+            finalUrl: pageRes.finalUrl,
+            notModified: true,
+            document: Option.none(),
+            outboundLinks: [],
+            etag: pageRes.etag ?? existing?.etag,
+            lastModified: pageRes.lastModified ?? existing?.lastModified,
+          }).pipe(Effect.ignore);
+          discovered++;
+          synced++;
+          continue;
+        }
+
+        const isSeed =
+          initialSeeds.includes(currentUrl) ||
+          initialSeeds.includes(pageRes.finalUrl);
+        const allowed =
+          isUrlAllowed(
+            pageRes.finalUrl,
+            target.includePatterns,
+            target.excludePatterns,
+          ) || isSeed;
+
+        // Extract outbound links to discover next crawl frontier
+        const content = extractContent(
+          pageRes.finalUrl,
+          pageRes.body,
+          undefined,
+          target.excludePatterns,
+        );
+
+        for (const link of content.extractedLinks) {
+          const parsedOpt = tryParseUrl(link).pipe(
+            Option.map((parsed) => {
+              parsed.hash = "";
+              return {
+                hostname: parsed.hostname,
+                normalized: parsed.toString(),
+              };
+            }),
+          );
+
+          if (Option.isSome(parsedOpt)) {
+            const { hostname, normalized } = parsedOpt.value;
+            if (
+              hostname === baseHost &&
+              !visited.has(normalized) &&
+              !queue.includes(normalized)
+            ) {
+              if (
+                isUrlAllowed(
+                  normalized,
+                  target.includePatterns,
+                  target.excludePatterns,
+                ) ||
+                isSeed
+              ) {
+                queue.push(normalized);
+              }
+            }
+          }
+        }
+
+        if (allowed) {
+          discovered++;
+          const { document, outboundLinks } = buildRawDocument(
+            target,
+            pageRes.finalUrl,
+            currentUrl,
+            pageRes.body,
+            pageRes.status,
+            pageRes.etag,
+            pageRes.lastModified,
+          );
+
+          yield* onPage({
+            url: currentUrl,
+            finalUrl: pageRes.finalUrl,
+            notModified: false,
+            document: Option.some(document),
+            outboundLinks,
+            etag: pageRes.etag,
+            lastModified: pageRes.lastModified,
+          }).pipe(Effect.ignore);
+          synced++;
+        }
+      }
+
+      return { discovered, synced, failed };
+    });
+  }
+
   discover(
     cursor: Option.Option<WebCursorData>,
   ): Effect.Effect<ReadonlyArray<DiscoveredItem>, ConnectorError> {
     const { target, httpClient } = this;
-    const pageCache = this.pageCache;
     return Effect.gen(function* () {
       const currentCursor = Option.getOrUndefined(cursor);
       const processed = currentCursor?.processedUrls ?? {};
@@ -775,19 +1102,15 @@ export class WebPageConnector implements SourceConnector<
         while (queue.length > 0 && discoveredUrls.length < maxPages) {
           const currentUrl = queue.shift()!;
 
-          const fetchOpt = yield* Cache.get(pageCache, currentUrl).pipe(
-            Effect.option,
-          );
+          const fetchOpt = yield* fetchPageContent(
+            currentUrl,
+            httpClient,
+            target.headers,
+          ).pipe(Effect.option);
 
           if (Option.isNone(fetchOpt)) continue;
           const pageRes = fetchOpt.value;
 
-          // Cache page content under finalUrl as well if redirect occurred
-          if (pageRes.finalUrl !== currentUrl) {
-            yield* Cache.set(pageCache, pageRes.finalUrl, pageRes);
-          }
-
-          // If the page matches includePatterns or is one of initial seeds, keep it
           const isSeed =
             initialSeeds.includes(currentUrl) ||
             initialSeeds.includes(pageRes.finalUrl);
@@ -811,7 +1134,7 @@ export class WebPageConnector implements SourceConnector<
           const content = extractContent(
             pageRes.finalUrl,
             pageRes.body,
-            undefined, // extract all links on the page so intermediate pages can bridge to targets
+            undefined,
             target.excludePatterns,
           );
 
@@ -856,7 +1179,6 @@ export class WebPageConnector implements SourceConnector<
           item.lastmod &&
           existing.lastModified === item.lastmod
         ) {
-          // Unchanged according to lastmod
           continue;
         }
 
@@ -879,58 +1201,29 @@ export class WebPageConnector implements SourceConnector<
   fetch(
     item: DiscoveredItem,
   ): Effect.Effect<ExtractedDocument, ConnectorError> {
-    const { target } = this;
-    const pageCache = this.pageCache;
+    const { target, httpClient } = this;
     return Effect.gen(function* () {
-      const res = yield* Cache.get(pageCache, item.uri);
-
-      const content = extractContent(
+      const res = yield* fetchPageContent(item.uri, httpClient, target.headers);
+      const { document } = buildRawDocument(
+        target,
         res.finalUrl,
+        item.uri,
         res.body,
-        target.includePatterns,
-        target.excludePatterns,
+        res.status,
+        res.etag,
+        res.lastModified,
       );
-
-      const docUuid = generateDocumentUuid("web", target.name, res.finalUrl);
-      const text =
-        content.extractedText.length > 0
-          ? content.extractedText
-          : content.title;
-      const sizeBytes = Buffer.byteLength(text, "utf8");
-
-      const doc: RawDocument = {
-        id: docUuid,
-        title: content.title || res.finalUrl,
-        content: text,
-        source: "web",
-        resourceName: target.name,
-        sourceKey: res.finalUrl,
-        sizeBytes,
-        metadata: {
-          url: res.finalUrl,
-          originalUrl: item.uri,
-          domain: new URL(res.finalUrl).hostname,
-          canonicalUrl: content.canonicalUrl,
-          httpStatus: res.status,
-          etag: res.etag,
-          lastModified: res.lastModified,
-          contentHash: sha256Hex(text),
-        },
-        tags: ["web", target.name],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
 
       const provenance: ProvenanceRecord = {
         source: "web",
-        documentId: docUuid,
+        documentId: document.id,
         uri: res.finalUrl,
         timestamp: item.lastModified,
         extractor: "WebPageConnector",
         extractionConfidence: 1.0,
       };
 
-      return { document: doc, provenance };
+      return { document, provenance };
     });
   }
 

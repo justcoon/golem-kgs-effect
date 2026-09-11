@@ -549,25 +549,37 @@ describe("Web Connector & Ingestion Subsystem", () => {
       assert.ok(!urls.includes("https://external.com/docs"));
       assert.equal(items.length, 5);
 
-      // Verify cached fetch returns content without throwing
+      // Verify fetch returns content without throwing
       const doc = await Effect.runPromise(connector.fetch(items[1]!));
       assert.equal(doc.document.title, "Develop on Golem");
       assert.ok(doc.document.content.includes("Develop on Golem"));
     });
 
-    it("should use WebPageConnector.make with Effect Cache to deduplicate fetch HTTP requests", async () => {
+    it("should crawl on the fly emitting documents and extracting links without retaining bodies in cache", async () => {
       let httpRequestsCount = 0;
-      const testHtml =
-        "<html><head><title>Cached Page</title></head><body><p>Hello Effect Cache</p></body></html>";
+      const htmlMap: Record<string, string> = {
+        "https://example.com": `
+          <html><head><title>Root Page</title></head>
+          <body><a href="/docs/page1">Doc 1</a></body></html>
+        `,
+        "https://example.com/docs/page1": `
+          <html><head><title>Page One</title></head>
+          <body><p>Content of page 1</p></body></html>
+        `,
+      };
 
-      const countingClient = HttpClient.make((req) => {
+      const mockClient = HttpClient.make((req) => {
         httpRequestsCount++;
+        const body = htmlMap[req.url] ?? "<html><body>404</body></html>";
         return Effect.succeed(
           HttpClientResponse.fromWeb(
             req,
-            new Response(testHtml, {
+            new Response(body, {
               status: 200,
-              headers: { "content-type": "text/html" },
+              headers: {
+                "content-type": "text/html",
+                etag: `"etag-${req.url}"`,
+              },
             }),
           ),
         );
@@ -576,45 +588,102 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const connector = await Effect.runPromise(
         WebPageConnector.make(
           {
-            name: "test-cache",
+            name: "test-crawl",
             baseUrl: "https://example.com",
             seedUrls: ["https://example.com"],
+            includePatterns: ["/docs/"],
           },
-          countingClient,
+          mockClient,
         ),
       );
 
-      const item = {
-        id: "https://example.com",
-        uri: "https://example.com",
-        sizeBytes: 0,
-        lastModified: new Date(),
-        metadata: { resourceName: "test-cache" },
-      };
+      const receivedDocs: string[] = [];
+      const stats = await Effect.runPromise(
+        connector.crawlOnTheFly(Option.none(), (event) =>
+          Effect.sync(() => {
+            if (Option.isSome(event.document)) {
+              receivedDocs.push(event.document.value.title);
+            }
+          }),
+        ),
+      );
 
-      // First fetch: should trigger 1 HTTP request via Cache lookup
-      const doc1 = await Effect.runPromise(connector.fetch(item));
-      assert.equal(doc1.document.title, "Cached Page");
-      assert.equal(httpRequestsCount, 1);
-
-      // Second fetch: should hit Effect Cache without issuing another HTTP request
-      const doc2 = await Effect.runPromise(connector.fetch(item));
-      assert.equal(doc2.document.title, "Cached Page");
-      assert.equal(httpRequestsCount, 1);
-
-      // Third fetch on another URI: triggers a second HTTP request
-      const item2 = {
-        ...item,
-        id: "https://example.com/other",
-        uri: "https://example.com/other",
-      };
-      const doc3 = await Effect.runPromise(connector.fetch(item2));
-      assert.equal(doc3.document.title, "Cached Page");
+      assert.equal(stats.discovered, 2);
+      assert.equal(stats.synced, 2);
+      assert.equal(stats.failed, 0);
       assert.equal(httpRequestsCount, 2);
+      assert.ok(receivedDocs.includes("Root Page"));
+      assert.ok(receivedDocs.includes("Page One"));
+    });
 
-      // Re-fetch item2: should hit cache
-      await Effect.runPromise(connector.fetch(item2));
-      assert.equal(httpRequestsCount, 2);
+    it("should handle HTTP 304 Not Modified and skip document body processing when cursor is fresh", async () => {
+      let headOrGetCalls = 0;
+      const mockClient = HttpClient.make((req) => {
+        headOrGetCalls++;
+        const ifNoneMatch = req.headers["if-none-match"];
+        if (ifNoneMatch === `"existing-etag"`) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              req,
+              new Response(null, {
+                status: 304,
+                headers: { etag: `"existing-etag"` },
+              }),
+            ),
+          );
+        }
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Fresh</title></head><body>body</body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html", etag: `"new-etag"` },
+              },
+            ),
+          ),
+        );
+      });
+
+      const connector = new WebPageConnector(
+        {
+          name: "test-304",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com"],
+        },
+        mockClient,
+      );
+
+      const events: Array<{ notModified: boolean; hasDoc: boolean }> = [];
+      const cursor = Option.some({
+        lastSyncTimestamp: "2026-09-01T00:00:00Z",
+        processedUrls: {
+          "https://example.com": {
+            url: "https://example.com",
+            etag: `"existing-etag"`,
+            syncedAt: "2026-09-01T00:00:00Z",
+          },
+        },
+      });
+
+      const stats = await Effect.runPromise(
+        connector.crawlOnTheFly(cursor, (event) =>
+          Effect.sync(() => {
+            events.push({
+              notModified: event.notModified,
+              hasDoc: Option.isSome(event.document),
+            });
+          }),
+        ),
+      );
+
+      assert.equal(stats.discovered, 1);
+      assert.equal(stats.synced, 1);
+      assert.equal(headOrGetCalls, 1);
+      assert.equal(events.length, 1);
+      assert.equal(events[0]?.notModified, true);
+      assert.equal(events[0]?.hasDoc, false);
     });
   });
 });

@@ -60,8 +60,6 @@ export function runWebIngestion(
             processedUrls: currentState.processedUrls,
           });
 
-    const discoveredItems = yield* connector.discover(cursorData);
-
     const newProcessedUrls: Record<string, WebProcessedUrlEntry> = force
       ? {}
       : { ...currentState.processedUrls };
@@ -69,38 +67,79 @@ export function runWebIngestion(
     let syncedCount = 0;
     let failedCount = 0;
 
-    for (const item of discoveredItems) {
-      const ok = yield* Effect.match(
+    const crawlResult = yield* connector
+      .crawlOnTheFly(cursorData, (event) =>
         Effect.gen(function* () {
-          const { document } = yield* connector.fetch(item);
-          yield* processAndIndexDocument(document);
+          if (event.notModified) {
+            const existing = newProcessedUrls[event.finalUrl];
+            if (existing) {
+              newProcessedUrls[event.finalUrl] = {
+                ...existing,
+                syncedAt: new Date().toISOString(),
+              };
+            }
+            syncedCount++;
+            return;
+          }
 
-          const meta = (document.metadata ?? {}) as Record<string, unknown>;
-          newProcessedUrls[item.id] = {
-            url: item.id,
-            etag: typeof meta.etag === "string" ? meta.etag : undefined,
-            lastModified:
-              typeof meta.lastModified === "string"
-                ? meta.lastModified
-                : undefined,
-            contentHash:
-              typeof meta.contentHash === "string"
-                ? meta.contentHash
-                : undefined,
-            syncedAt: new Date().toISOString(),
-          };
-          syncedCount++;
+          if (Option.isSome(event.document)) {
+            const document = event.document.value;
+            yield* processAndIndexDocument(document);
+
+            const meta = (document.metadata ?? {}) as Record<string, unknown>;
+            newProcessedUrls[event.finalUrl] = {
+              url: event.finalUrl,
+              etag: typeof meta.etag === "string" ? meta.etag : event.etag,
+              lastModified:
+                typeof meta.lastModified === "string"
+                  ? meta.lastModified
+                  : event.lastModified,
+              contentHash:
+                typeof meta.contentHash === "string"
+                  ? meta.contentHash
+                  : undefined,
+              syncedAt: new Date().toISOString(),
+            };
+            syncedCount++;
+
+            // Progressive checkpointing every 10 pages
+            if (syncedCount % 10 === 0) {
+              yield* checkpointRepo
+                .saveCheckpoint({
+                  connectorId: `web_${resourceName}`,
+                  cursorData: {
+                    lastSyncTimestamp: new Date().toISOString(),
+                    processedUrls: newProcessedUrls,
+                  },
+                  status: "RUNNING",
+                  metrics: {
+                    synced: syncedCount,
+                    failed: failedCount,
+                    durationMs: Date.now() - startTime,
+                  },
+                })
+                .pipe(Effect.ignore);
+            }
+          }
+        }).pipe(
+          Effect.catch((err: unknown) => {
+            failedCount++;
+            return Effect.logWarning(
+              `Failed to process document for ${event.finalUrl}: ${String(err)}`,
+            );
+          }),
+        ),
+      )
+      .pipe(
+        Effect.catch(() => {
+          failedCount++;
+          return Effect.succeed({
+            discovered: 0,
+            synced: syncedCount,
+            failed: failedCount,
+          });
         }),
-        {
-          onFailure: () => false,
-          onSuccess: () => true,
-        },
       );
-
-      if (!ok) {
-        failedCount++;
-      }
-    }
 
     const duration = Date.now() - startTime;
     const nowIso = new Date().toISOString();
@@ -114,7 +153,7 @@ export function runWebIngestion(
         },
         status: failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED",
         metrics: {
-          discovered: discoveredItems.length,
+          discovered: crawlResult.discovered,
           synced: syncedCount,
           failed: failedCount,
           durationMs: duration,
@@ -136,7 +175,7 @@ export function runWebIngestion(
       cursor: null,
       metrics: {
         totalDiscovered:
-          currentState.metrics.totalDiscovered + discoveredItems.length,
+          currentState.metrics.totalDiscovered + crawlResult.discovered,
         totalSynced: currentState.metrics.totalSynced + syncedCount,
         totalFailed: currentState.metrics.totalFailed + failedCount,
         lastDurationMs: duration,
