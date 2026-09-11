@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Effect, Option, Redacted, Schema } from "effect";
+import { Effect, Option, Redacted, Schema, Stream } from "effect";
 import {
   ResourcesConfigSchema,
   S3ResourceTargetSchema,
@@ -352,6 +352,36 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
         // Determinism: Re-fetching for marketing yields identical UUID
         const docMarketingRepeat = yield* connMarketing.fetch(discMarketing[0]);
         assert.equal(docMarketing.document.id, docMarketingRepeat.document.id);
+      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
+
+      await Effect.runPromise(testProgram);
+    });
+
+    it("should stream discovered items via discoverStream", async () => {
+      const mockFiles = {
+        "docs/a.md": {
+          content: "# File A",
+          lastModified: new Date("2026-09-06T10:00:00.000Z"),
+          etag: "etag_a",
+        },
+        "docs/b.md": {
+          content: "# File B",
+          lastModified: new Date("2026-09-06T10:00:00.000Z"),
+          etag: "etag_b",
+        },
+      };
+
+      const testProgram = Effect.gen(function* () {
+        const service = yield* S3ConnectorService;
+        const connector = yield* service.createConnector("main");
+
+        const streamItems = yield* Stream.runCollect(
+          connector.discoverStream(Option.none()),
+        );
+
+        assert.equal(streamItems.length, 2);
+        assert.equal(streamItems[0].id, "docs/a.md");
+        assert.equal(streamItems[1].id, "docs/b.md");
       }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
 
       await Effect.runPromise(testProgram);

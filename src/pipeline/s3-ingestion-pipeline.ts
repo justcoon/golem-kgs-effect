@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect";
+import { Effect, HashMap, Option, Ref, Stream } from "effect";
 import { type S3TaskMetrics, type S3TaskState } from "../agents/types.js";
 import { type S3CursorData } from "../connectors/connector-base.js";
 import { S3ConnectorService } from "../connectors/s3-connector.js";
@@ -57,70 +57,101 @@ export function runS3Ingestion(
             continuationToken: currentState.cursor ?? undefined,
           });
 
-    const discoveredItems = yield* connector.discover(cursorData);
+    const processedRef = yield* Ref.make<HashMap.HashMap<string, string>>(
+      force
+        ? HashMap.empty()
+        : HashMap.fromIterable(Object.entries(currentState.processedKeys)),
+    );
 
-    const newProcessedKeys: Record<string, string> = force
-      ? {}
-      : { ...currentState.processedKeys };
+    const discoveredCountRef = yield* Ref.make(0);
+    const syncedCountRef = yield* Ref.make(0);
+    const failedCountRef = yield* Ref.make(0);
 
-    let syncedCount = 0;
-    let failedCount = 0;
-
-    for (const item of discoveredItems) {
-      const ok = yield* Effect.match(
+    yield* connector.discoverStream(cursorData).pipe(
+      Stream.runForEach((item) =>
         Effect.gen(function* () {
+          yield* Ref.update(discoveredCountRef, (n) => n + 1);
+
           const { document } = yield* connector.fetch(item);
           yield* processAndIndexDocument(document);
-          newProcessedKeys[item.id] = item.eTag ?? "";
-          syncedCount++;
-        }),
-        {
-          onFailure: () => false,
-          onSuccess: () => true,
-        },
-      );
-      if (!ok) {
-        failedCount++;
-      }
-    }
+
+          yield* Ref.update(processedRef, (map) =>
+            HashMap.set(map, item.id, item.eTag ?? ""),
+          );
+          const syncedCount = yield* Ref.updateAndGet(
+            syncedCountRef,
+            (n) => n + 1,
+          );
+
+          // Progressive checkpointing every 10 documents
+          if (syncedCount % 10 === 0) {
+            const currentProcessed = yield* Ref.get(processedRef);
+            const failedCount = yield* Ref.get(failedCountRef);
+            yield* checkpointRepo
+              .saveCheckpoint({
+                connectorId: `s3_${resourceName}`,
+                cursorData: {
+                  lastSyncTimestamp: new Date().toISOString(),
+                  processedKeys: Object.fromEntries(currentProcessed),
+                },
+                status: "RUNNING",
+                metrics: {
+                  synced: syncedCount,
+                  failed: failedCount,
+                  durationMs: Date.now() - startTime,
+                },
+              })
+              .pipe(Effect.ignore);
+          }
+        }).pipe(
+          Effect.catch((_err: unknown) =>
+            Ref.update(failedCountRef, (n) => n + 1),
+          ),
+        ),
+      ),
+    );
 
     const duration = Date.now() - startTime;
     const nowIso = new Date().toISOString();
+    const finalProcessedMap = yield* Ref.get(processedRef);
+    const finalProcessedKeys = Object.fromEntries(finalProcessedMap);
+    const totalDiscovered = yield* Ref.get(discoveredCountRef);
+    const totalSynced = yield* Ref.get(syncedCountRef);
+    const totalFailed = yield* Ref.get(failedCountRef);
+
+    const status: "COMPLETED" | "FAILED" =
+      totalFailed > 0 && totalSynced === 0 ? "FAILED" : "COMPLETED";
+    const errorMessage =
+      status === "FAILED"
+        ? `Failed to ingest all ${totalFailed} discovered items from resource ${resourceName}`
+        : null;
 
     yield* checkpointRepo
       .saveCheckpoint({
         connectorId: `s3_${resourceName}`,
         cursorData: {
           lastSyncTimestamp: nowIso,
-          processedKeys: newProcessedKeys,
+          processedKeys: finalProcessedKeys,
         },
-        status: failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED",
+        status,
         metrics: {
-          discovered: discoveredItems.length,
-          synced: syncedCount,
-          failed: failedCount,
+          discovered: totalDiscovered,
+          synced: totalSynced,
+          failed: totalFailed,
           durationMs: duration,
         },
       })
       .pipe(Effect.ignore);
 
-    const status: "COMPLETED" | "FAILED" =
-      failedCount > 0 && syncedCount === 0 ? "FAILED" : "COMPLETED";
-    const errorMessage =
-      status === "FAILED"
-        ? `Failed to ingest all ${failedCount} discovered items from resource ${resourceName}`
-        : null;
-
     return {
       status,
       lastSyncTimestamp: nowIso,
-      processedKeys: newProcessedKeys,
+      processedKeys: finalProcessedKeys,
       cursor: null,
       metrics: {
-        totalDiscovered:
-          currentState.metrics.totalDiscovered + discoveredItems.length,
-        totalSynced: currentState.metrics.totalSynced + syncedCount,
-        totalFailed: currentState.metrics.totalFailed + failedCount,
+        totalDiscovered: currentState.metrics.totalDiscovered + totalDiscovered,
+        totalSynced: currentState.metrics.totalSynced + totalSynced,
+        totalFailed: currentState.metrics.totalFailed + totalFailed,
         lastDurationMs: duration,
       },
       errorMessage,
