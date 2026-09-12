@@ -35,6 +35,28 @@ export class EmbeddingConfigValues extends Context.Service<
   EmbeddingConfigShape
 >()("app/config/EmbeddingConfigValues") {}
 
+export const LlmConfigFields = {
+  llm: Schema.Struct({
+    api_base: Schema.String,
+    model: Schema.String,
+    apiKey: Schema.Redacted(Schema.String),
+  }),
+};
+
+export const LlmConfigSchema = Schema.Struct(LlmConfigFields);
+export type LlmConfigSchema = typeof LlmConfigSchema.Type;
+
+export interface LlmConfigShape {
+  readonly api_base: string;
+  readonly model: string;
+  readonly apiKey: Redacted.Redacted<string>;
+}
+
+export class LlmConfigValues extends Context.Service<
+  LlmConfigValues,
+  LlmConfigShape
+>()("app/config/LlmConfigValues") {}
+
 export const S3ResourceTargetSchema = Schema.Struct({
   name: Schema.String,
   endpoint: Schema.String,

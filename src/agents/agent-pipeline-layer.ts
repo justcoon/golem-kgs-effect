@@ -8,11 +8,13 @@ import {
   EntityRepository,
   GraphRepository,
 } from "../storage/index.js";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
   EmbeddingService,
   EntityResolverService,
   ExtractionService,
   GraphRAGService,
+  LlmSynthesisService,
 } from "../pipeline/index.js";
 import {
   EmbeddingConfigValues,
@@ -197,17 +199,42 @@ export const makeGraphRAGLayer = <E1, R1, E2, R2>(
 
 /**
  * Dedicated layer factory for KnowledgeAccessAgent.
- * Provides only SQL, Repositories, EmbeddingService, and GraphRAGService.
+ * Provides SQL, Repositories, EmbeddingService, GraphRAGService, and optional LlmSynthesisService.
  * Excludes connector services, extraction rules, and entity resolution.
  */
+export const makeLlmLayer = (config: AppAgentConfigService) =>
+  Effect.gen(function* () {
+    const apiUrl = yield* config.llm.api_base;
+    const model = yield* config.llm.model;
+    const apiKey = yield* config.llm.apiKey.get;
+
+    const openAiClientLive = OpenAiClient.layer({
+      apiKey,
+      apiUrl,
+    }).pipe(Layer.provide(FetchHttpClient.layer));
+
+    const languageModelLive = OpenAiLanguageModel.layer({ model }).pipe(
+      Layer.provide(openAiClientLive),
+    );
+
+    return LlmSynthesisService.Default.pipe(Layer.provide(languageModelLive));
+  });
+
 export const makeAccessAgentLayer = (config: AppAgentConfigService) =>
   Effect.gen(function* () {
     const { sqlLayer, reposLayer } =
       yield* makeStorageAndRepositoriesLayer(config);
     const embeddingLayer = yield* makeEmbeddingLayer(config);
     const graphRagLayer = makeGraphRAGLayer(reposLayer, embeddingLayer);
+    const llmLayer = yield* makeLlmLayer(config);
 
-    return Layer.mergeAll(sqlLayer, reposLayer, embeddingLayer, graphRagLayer);
+    return Layer.mergeAll(
+      sqlLayer,
+      reposLayer,
+      embeddingLayer,
+      graphRagLayer,
+      llmLayer,
+    );
   });
 
 /**

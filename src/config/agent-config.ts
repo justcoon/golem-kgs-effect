@@ -3,12 +3,14 @@ import {
   DatabaseConfigFields,
   EmbeddingConfigFields,
   ExtractionConfigFields,
+  LlmConfigFields,
   ResourcesConfigFields,
 } from "./schema.js";
 
 export class AppAgentConfig extends defineConfig("AppAgent.Config", {
   ...DatabaseConfigFields,
   ...EmbeddingConfigFields,
+  ...LlmConfigFields,
   ...ResourcesConfigFields,
   ...ExtractionConfigFields,
 }) {}

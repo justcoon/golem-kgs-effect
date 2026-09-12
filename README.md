@@ -469,6 +469,9 @@ Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HT
 | `EMBEDDING_API_BASE`    | OpenAI-compatible embedding base URL | `http://127.0.0.1:11434/v1` |
 | `EMBEDDING_MODEL`       | Embedding model identifier           | `nomic-embed-text`          |
 | `EMBEDDING_API_KEY`     | Embedding service API key            | `ollama`                    |
+| `LLM_API_BASE`          | OpenAI-compatible LLM base URL       | `http://127.0.0.1:11434/v1` |
+| `LLM_MODEL`             | LLM identifier (Ollama / OpenRouter) | `qwen2.5:1.5b`              |
+| `LLM_API_KEY`           | LLM service API key                  | `ollama`                    |
 
 ---
 
@@ -479,14 +482,19 @@ Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HT
 - Node.js >= 20
 - Docker Desktop
 - [Golem CLI](https://learn.golem.cloud/install) >= 1.5.0
-- Ollama with `nomic-embed-text`:
+- Ollama with `nomic-embed-text` (embeddings) and `qwen2.5:1.5b` or `llama3.2:3b` (question-answering synthesis):
   ```bash
   ollama pull nomic-embed-text
+  ollama pull qwen2.5:1.5b
   ```
+
+> [!TIP]
+> **Using OpenRouter or External Providers:**
+> You can also use any OpenAI-compatible provider like OpenRouter by pointing `LLM_API_BASE` to `https://openrouter.ai/api/v1`, setting `LLM_MODEL` to a model such as `meta-llama/llama-3.2-3b-instruct:free`, and supplying your `LLM_API_KEY`.
 
 ### 1. Start Infrastructure
 
-Start PostgreSQL with pgvector and RustFS (S3 storage):
+Start PostgreSQL with pgvector, RustFS (S3 storage), and Ollama:
 
 ```bash
 docker compose up -d
@@ -508,6 +516,9 @@ POSTGRES_PORT=5432
 S3_ENDPOINT_URL=http://127.0.0.1:9000
 EMBEDDING_API_BASE=http://127.0.0.1:11434/v1
 EMBEDDING_MODEL=nomic-embed-text
+LLM_API_BASE=http://127.0.0.1:11434/v1
+LLM_MODEL=qwen2.5:1.5b
+LLM_API_KEY=ollama
 ```
 
 ### 3. Build and Deploy
@@ -578,7 +589,10 @@ curl -X POST 'http://localhost:9006/api/coordinator/sync' \
 
 ### GraphRAG Question Answering
 
-Returns synthesized answers formatted in clean GitHub-Flavored Markdown with citations, key entity highlights, and relationship insights ready for rich display in frontend and MCP clients.
+Answers natural language questions grounded in retrieved document chunks and knowledge graph relationships. Synthesizes coherent, cited answers using an LLM (e.g. `qwen2.5:1.5b` or `llama3.2:3b` via Ollama, or OpenRouter) with automatic fallback to deterministic synthesis if the LLM is unavailable. Formatted in clean GitHub-Flavored Markdown with source citations, key entity highlights, and relationship insights ready for rich display in frontend and MCP clients.
+
+> [!NOTE]
+> `generateAnswer` defaults to `false` to provide ultra-fast retrieval responses without LLM latency. Pass `"generateAnswer": true` in the request body to opt into LLM synthesis.
 
 ```bash
 curl -s --url 'http://localhost:9006/api/knowledge/ask' \
@@ -589,6 +603,13 @@ curl -s --url 'http://localhost:9006/api/knowledge/ask' \
     "maxHops": 2,
     "generateAnswer": true
   }'
+```
+
+You can also run the automated test script to verify both direct LLM connectivity and the `/ask` synthesis endpoint:
+
+```bash
+# Test direct Ollama / OpenRouter LLM call and Golem /ask endpoint
+./test_llm_call.sh --mode all --question "What is Golem Cloud?"
 ```
 
 ### Hybrid Search

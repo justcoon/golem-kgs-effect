@@ -15,6 +15,8 @@ secretDefaults:
       password: "{{ POSTGRES_PASSWORD }}"
     embedding:
       apiKey: "{{ EMBEDDING_API_KEY }}"
+    llm:
+      apiKey: "{{ LLM_API_KEY }}"
     resources:
       s3:
         - name: "main"
@@ -46,6 +48,9 @@ components:
       embedding:
         api_base: "{{ EMBEDDING_API_BASE }}"
         model: "{{ EMBEDDING_MODEL }}"
+      llm:
+        api_base: "{{ LLM_API_BASE }}"
+        model: "{{ LLM_MODEL }}"
       extraction:
         cooccurrence:
           enabled: true

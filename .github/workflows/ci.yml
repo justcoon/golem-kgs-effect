@@ -154,6 +154,9 @@ jobs:
           EMBEDDING_API_BASE: http://localhost:11434/v1
           EMBEDDING_MODEL: nomic-embed-text
           EMBEDDING_API_KEY: ollama
+          LLM_MODEL: qwen2.5:1.5b
+          LLM_API_BASE: http://localhost:11434/v1
+          LLM_API_KEY: ollama
         run: golem deploy --reset --yes
       - name: Smoke test deployment
         run: |
