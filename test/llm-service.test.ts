@@ -8,7 +8,7 @@ import {
 } from "../src/pipeline/llm-service.js";
 import { synthesizeAnswerText } from "../src/pipeline/graphrag-service.js";
 import { type GraphRAGContextBundle } from "../src/domain/query.js";
-import { LlmConfigSchema } from "../src/config/schema.js";
+import { LlmConfigSchema, parseBooleanSecret } from "../src/config/schema.js";
 
 const createMockContextBundle = (
   overrides?: Partial<GraphRAGContextBundle>,
@@ -181,13 +181,14 @@ describe("LlmSynthesisService", () => {
     );
   });
 
-  describe("LlmConfigSchema", () => {
-    it("should decode valid LlmConfigSchema with Redacted apiKey", () => {
+  describe("LlmConfigSchema & Secret Configuration", () => {
+    it("should decode valid LlmConfigSchema with Redacted apiKey and useForAsk string", () => {
       const raw = {
         llm: {
           api_base: "http://localhost:11434/v1",
           model: "qwen2.5:1.5b",
           apiKey: Redacted.make("ollama"),
+          useForAsk: Redacted.make("false"),
         },
       };
 
@@ -196,10 +197,42 @@ describe("LlmSynthesisService", () => {
       assert.strictEqual(decoded.llm.api_base, "http://localhost:11434/v1");
       assert.strictEqual(decoded.llm.model, "qwen2.5:1.5b");
       assert.strictEqual(Redacted.value(decoded.llm.apiKey), "ollama");
+      assert.strictEqual(Redacted.value(decoded.llm.useForAsk), "false");
+    });
+
+    it("should decode valid LlmConfigSchema with Redacted string useForAsk (from env templating)", () => {
+      const raw = {
+        llm: {
+          api_base: "http://localhost:11434/v1",
+          model: "qwen2.5:1.5b",
+          apiKey: Redacted.make("ollama"),
+          useForAsk: Redacted.make("false"),
+        },
+      };
+
+      const decoded = Schema.decodeUnknownSync(LlmConfigSchema)(raw);
+      assert.strictEqual(Redacted.value(decoded.llm.useForAsk), "false");
     });
 
     it("should reject when llm is missing", () => {
       assert.throws(() => Schema.decodeUnknownSync(LlmConfigSchema)({}));
+    });
+
+    it("parseBooleanSecret should handle booleans, strings, and fallback default", () => {
+      assert.strictEqual(parseBooleanSecret(Redacted.make(true)), true);
+      assert.strictEqual(parseBooleanSecret(Redacted.make(false)), false);
+      assert.strictEqual(parseBooleanSecret(Redacted.make("TRUE")), true);
+      assert.strictEqual(parseBooleanSecret(Redacted.make("FALSE")), false);
+      assert.strictEqual(parseBooleanSecret(Redacted.make("1")), true);
+      assert.strictEqual(parseBooleanSecret(Redacted.make("0")), false);
+      assert.strictEqual(
+        parseBooleanSecret(Redacted.make("invalid"), false),
+        false,
+      );
+      assert.strictEqual(
+        parseBooleanSecret(Redacted.make("invalid"), true),
+        true,
+      );
     });
   });
 });

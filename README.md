@@ -472,6 +472,7 @@ Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HT
 | `LLM_API_BASE`          | OpenAI-compatible LLM base URL       | `http://127.0.0.1:11434/v1` |
 | `LLM_MODEL`             | LLM identifier (Ollama / OpenRouter) | `qwen2.5:1.5b`              |
 | `LLM_API_KEY`           | LLM service API key                  | `ollama`                    |
+| `LLM_USE_FOR_ASK`       | Enable LLM for `/ask` by default     | `false`                     |
 
 ---
 
@@ -519,6 +520,7 @@ EMBEDDING_MODEL=nomic-embed-text
 LLM_API_BASE=http://127.0.0.1:11434/v1
 LLM_MODEL=qwen2.5:1.5b
 LLM_API_KEY=ollama
+LLM_USE_FOR_ASK=false
 ```
 
 ### 3. Build and Deploy
@@ -592,7 +594,13 @@ curl -X POST 'http://localhost:9006/api/coordinator/sync' \
 Answers natural language questions grounded in retrieved document chunks and knowledge graph relationships. Synthesizes coherent, cited answers using an LLM (e.g. `qwen2.5:1.5b` or `llama3.2:3b` via Ollama, or OpenRouter) with automatic fallback to deterministic synthesis if the LLM is unavailable. Formatted in clean GitHub-Flavored Markdown with source citations, key entity highlights, and relationship insights ready for rich display in frontend and MCP clients.
 
 > [!NOTE]
-> `generateAnswer` defaults to `false` to provide ultra-fast retrieval responses without LLM latency. Pass `"generateAnswer": true` in the request body to opt into LLM synthesis.
+> - `generateAnswer` defaults to `false` to provide ultra-fast retrieval responses without answer synthesis latency. Pass `"generateAnswer": true` in the request body to generate an answer.
+> - When generating an answer, whether the LLM is used is controlled by the secret configuration `llm.useForAsk` (defaults to `false` in `.env`, using deterministic template generation).
+> - Because `llm.useForAsk` is backed by a **Golem Secret**, operators can dynamically toggle LLM synthesis live via CLI without redeploying:
+>   ```bash
+>   golem secret update-value llm.useForAsk --secret-value 'true'   # Enable LLM
+>   golem secret update-value llm.useForAsk --secret-value 'false'  # Disable LLM
+>   ```
 
 ```bash
 curl -s --url 'http://localhost:9006/api/knowledge/ask' \

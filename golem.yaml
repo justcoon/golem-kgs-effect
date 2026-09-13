@@ -17,6 +17,7 @@ secretDefaults:
       apiKey: "{{ EMBEDDING_API_KEY }}"
     llm:
       apiKey: "{{ LLM_API_KEY }}"
+      useForAsk: "{{ LLM_USE_FOR_ASK }}"
     resources:
       s3:
         - name: "main"

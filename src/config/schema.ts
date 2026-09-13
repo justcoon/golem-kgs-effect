@@ -35,11 +35,28 @@ export class EmbeddingConfigValues extends Context.Service<
   EmbeddingConfigShape
 >()("app/config/EmbeddingConfigValues") {}
 
+export const BooleanSecretSchema = Schema.Redacted(Schema.String);
+
+export const parseBooleanSecret = (
+  secret: Redacted.Redacted<boolean | string>,
+  defaultValue = false,
+): boolean => {
+  const val = Redacted.value(secret);
+  if (typeof val === "boolean") return val;
+  if (typeof val === "string") {
+    const lower = val.trim().toLowerCase();
+    if (lower === "true" || lower === "1") return true;
+    if (lower === "false" || lower === "0") return false;
+  }
+  return defaultValue;
+};
+
 export const LlmConfigFields = {
   llm: Schema.Struct({
     api_base: Schema.String,
     model: Schema.String,
     apiKey: Schema.Redacted(Schema.String),
+    useForAsk: BooleanSecretSchema,
   }),
 };
 
@@ -50,6 +67,7 @@ export interface LlmConfigShape {
   readonly api_base: string;
   readonly model: string;
   readonly apiKey: Redacted.Redacted<string>;
+  readonly useForAsk: Redacted.Redacted<string>;
 }
 
 export class LlmConfigValues extends Context.Service<
