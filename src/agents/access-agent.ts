@@ -20,6 +20,7 @@ import {
 import { type Entity } from "../domain/entity.js";
 import { type RawDocument } from "../domain/provenance.js";
 import { AppAgentConfig } from "../config/agent-config.js";
+import { parseBooleanSecret } from "../config/schema.js";
 import {
   CheckpointRepository,
   ChunkRepository,
@@ -31,6 +32,7 @@ import {
 import {
   EmbeddingService,
   GraphRAGService,
+  LlmSynthesisService,
   synthesizeAnswerText,
 } from "../pipeline/index.js";
 import { makeAccessAgentLayer } from "./agent-pipeline-layer.js";
@@ -458,7 +460,7 @@ export const KnowledgeAccessAgent = defineAgent({
           };
         }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-      ask: ({ query, topK = 5, maxHops = 2, generateAnswer = true }) =>
+      ask: ({ query, topK = 5, maxHops = 2, generateAnswer = false }) =>
         Effect.gen(function* () {
           const graphRagService = yield* GraphRAGService;
           const bundle = yield* graphRagService.retrieveContext({
@@ -510,7 +512,28 @@ export const KnowledgeAccessAgent = defineAgent({
 
           let answer = "";
           if (generateAnswer) {
-            answer = synthesizeAnswerText(query, bundle);
+            const useForAskSecret = yield* config.llm.useForAsk.get;
+            const useForAsk = parseBooleanSecret(useForAskSecret, false);
+
+            if (useForAsk) {
+              const maybeLlmService =
+                yield* Effect.serviceOption(LlmSynthesisService);
+              if (Option.isSome(maybeLlmService)) {
+                answer = yield* maybeLlmService.value
+                  .synthesizeAnswer(query, bundle)
+                  .pipe(
+                    Effect.catchTag("LlmSynthesisError", (err) =>
+                      Effect.logWarning(
+                        `LLM synthesis failed, falling back to deterministic answer: ${err.message}`,
+                      ).pipe(Effect.as(synthesizeAnswerText(query, bundle))),
+                    ),
+                  );
+              } else {
+                answer = synthesizeAnswerText(query, bundle);
+              }
+            } else {
+              answer = synthesizeAnswerText(query, bundle);
+            }
           }
 
           const topScore = bundle.relevantChunks[0]?.score ?? 0.5;

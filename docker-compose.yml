@@ -92,12 +92,14 @@ services:
     environment:
       - OLLAMA_HOST=ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - LLM_MODEL=${LLM_MODEL}
     networks:
       - golem-kg-network
     entrypoint: >
       /bin/sh -c "
       ollama pull $${OLLAMA_MODEL} &&
-      echo 'Embedding model downloaded successfully'
+      ollama pull $${LLM_MODEL} &&
+      echo 'Ollama model setup complete'
       "
 
 volumes:
