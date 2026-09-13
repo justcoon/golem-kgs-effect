@@ -5,6 +5,16 @@ app: golem-kgs-effect
 environments:
   local:
     server: local
+  test:
+    server: local
+    componentPresets: test
+    cli:
+      autoConfirm: true
+      reset: true
+      format: json
+    deployment:
+      compatibilityCheck: false
+      versionCheck: false
   cloud:
     server: cloud
 
@@ -35,12 +45,51 @@ secretDefaults:
             - "https://learn.golem.cloud"
           includePatterns:
             - "/v1.5/"
+  test:
+    db:
+      user: "{{ POSTGRES_USER }}"
+      password: "{{ POSTGRES_PASSWORD }}"
+    embedding:
+      apiKey: "{{ EMBEDDING_API_KEY }}"
+    llm:
+      apiKey: "{{ LLM_API_KEY }}"
+      useForAsk: "{{ LLM_USE_FOR_ASK }}"
+    resources:
+      s3:
+        - name: "main"
+          endpoint: "{{ S3_ENDPOINT_URL }}"
+          region: "{{ AWS_DEFAULT_REGION }}"
+          bucket: "{{ AWS_S3_BUCKET }}"
+          prefixes:
+            - "general/"
+          accessKeyId: "{{ AWS_ACCESS_KEY_ID }}"
+          secretAccessKey: "{{ AWS_SECRET_ACCESS_KEY }}"
+      web:
+        - name: "golem-docs"
+          baseUrl: "https://learn.golem.cloud"
+          seedUrls:
+            - "https://learn.golem.cloud"
+          includePatterns:
+            - "/v1.5/"
 
 
 components:
   golem-kgs-effect:effect-main:
     dir: ""
     templates: effect
+    presets:
+      test:
+        config:
+          db:
+            host: "{{ POSTGRES_HOST }}"
+            db: "{{ POSTGRES_DB }}"
+            port: "{{ POSTGRES_PORT }}"
+          embedding:
+            api_base: "{{ EMBEDDING_API_BASE }}"
+            model: "{{ EMBEDDING_MODEL }}"
+          llm:
+            api_base: "{{ LLM_API_BASE }}"
+            model: "{{ LLM_MODEL }}"
     config:
       db:
         host: "{{ POSTGRES_HOST }}"
@@ -154,6 +203,13 @@ httpApi:
           IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
           WebIngestorTaskAgent: {}
+    test:
+      - domain: localhost:9006
+        agents:
+          KnowledgeAccessAgent: {}
+          IngestionCoordinatorAgent: {}
+          S3IngestorTaskAgent: {}
+          WebIngestorTaskAgent: {}
 
 mcp:
   deployments:
@@ -161,4 +217,9 @@ mcp:
       - domain: localhost:9007
         agents:
           KnowledgeAccessAgent: {}
+    test:
+      - domain: localhost:9007
+        agents:
+          KnowledgeAccessAgent: {}
+
 

@@ -1,0 +1,29 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG GOLEM_VERSION=1.5.10
+
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        GOLEM_ARCH="x86_64-unknown-linux-gnu"; \
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+        GOLEM_ARCH="aarch64-unknown-linux-gnu"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    echo "Downloading Golem v${GOLEM_VERSION} for ${GOLEM_ARCH}..." && \
+    curl -Ssf -L -o /usr/local/bin/golem "https://github.com/golemcloud/golem/releases/download/v${GOLEM_VERSION}/golem-${GOLEM_ARCH}" && \
+    chmod +x /usr/local/bin/golem && \
+    golem --version
+
+EXPOSE 9881 9006 9007
+
+HEALTHCHECK --interval=3s --timeout=3s --start-period=5s --retries=15 \
+    CMD curl -f http://127.0.0.1:9881/healthcheck || exit 1
+
+ENTRYPOINT ["golem", "server", "run"]
+CMD ["--router-addr", "0.0.0.0", "--router-port", "9881", "--custom-request-port", "9006", "--mcp-port", "9007", "--clean"]

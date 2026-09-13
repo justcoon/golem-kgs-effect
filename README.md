@@ -535,6 +535,19 @@ set -a && source .env && set +a
 golem deploy --redeploy-agents --yes
 ```
 
+#### Run End-to-End (E2E) Tests in Isolated Environment
+
+The project includes an automated, isolated end-to-end test pipeline running in a dedicated Docker Compose stack (`docker-compose.e2e.yml`) with its own PostgreSQL, RustFS S3, and containerized Golem server (`Dockerfile.golem-server`):
+
+```bash
+# Automated one-shot runner: spins up clean stack, builds, deploys, runs E2E tests, and tears down
+./run_e2e_test.sh
+
+# Or run E2E test suite against an active test server (requires .env.e2e loaded)
+npm run test:e2e
+```
+
+
 The Golem HTTP Gateway will be active on **`http://localhost:9006`**, and the Golem MCP Gateway will be active on **`http://localhost:9007/mcp`**.
 
 ### 4. Start Frontend

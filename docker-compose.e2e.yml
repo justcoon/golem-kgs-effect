@@ -1,0 +1,115 @@
+name: golem-kgs-effect-e2e
+
+services:
+  # PostgreSQL with pgvector extension (E2E Isolated Instance)
+  postgres-e2e:
+    image: pgvector/pgvector:pg18-trixie
+    container_name: golem-kg-postgres-e2e
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-golem_kg_e2e}
+      POSTGRES_USER: ${POSTGRES_USER:-golem_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-golem_password}
+    command: ["postgres", "-c", "log_statement=all"]
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_e2e_data:/var/lib/postgresql
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - golem-kg-e2e-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-golem_user} -d ${POSTGRES_DB:-golem_kg_e2e}"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  # RustFS S3-compatible storage (E2E Isolated Instance)
+  rustfs-e2e:
+    image: rustfs/rustfs:latest
+    container_name: golem-kg-rustfs-e2e
+    environment:
+      RUSTFS_DATA_DIR: /data
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:-rustfsadmin123}
+      RUSTFS_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      RUSTFS_BUCKET: ${AWS_S3_BUCKET:-golem-documents}
+      RUSTFS_ADDR: 0.0.0.0:9000
+      RUSTFS_LOG_LEVEL: info
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-rustfsadmin123}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    ports:
+      - "${S3_HOST_PORT:-9010}:9000"
+    volumes:
+      - rustfs_e2e_data:/data
+    networks:
+      - golem-kg-e2e-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  # S3 bucket initialization and seeding of test fixtures
+  rustfs-setup-e2e:
+    image: amazon/aws-cli:latest
+    container_name: golem-kg-rustfs-setup-e2e
+    depends_on:
+      rustfs-e2e:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-rustfsadmin123}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-golem-documents}
+    volumes:
+      - ./tests/fixtures/s3:/fixtures:ro
+    networks:
+      - golem-kg-e2e-network
+    entrypoint: >
+      /bin/sh -c "
+      aws --endpoint-url http://rustfs-e2e:9000 s3 mb s3://$${AWS_S3_BUCKET} || true &&
+      aws --endpoint-url http://rustfs-e2e:9000 s3 cp /fixtures s3://$${AWS_S3_BUCKET}/general/ --recursive &&
+      echo 'RustFS E2E fixtures upload complete'
+      "
+
+  # Containerized Golem Server running isolated local server
+  golem-server-e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile.golem-server
+      args:
+        GOLEM_VERSION: ${GOLEM_VERSION:-1.5.10}
+    container_name: golem-server-e2e
+    depends_on:
+      postgres-e2e:
+        condition: service_healthy
+      rustfs-setup-e2e:
+        condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${GOLEM_TEST_ROUTER_PORT:-9881}:9881"
+      - "${GOLEM_TEST_CUSTOM_PORT:-9006}:9006"
+      - "${GOLEM_TEST_MCP_PORT:-9007}:9007"
+    volumes:
+      - golem_server_e2e_data:/root/.golem
+    networks:
+      - golem-kg-e2e-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9881/healthcheck"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres_e2e_data:
+    driver: local
+  rustfs_e2e_data:
+    driver: local
+  golem_server_e2e_data:
+    driver: local
+
+networks:
+  golem-kg-e2e-network:
+    driver: bridge
