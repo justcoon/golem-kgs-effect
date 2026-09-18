@@ -208,28 +208,30 @@ ChunkRepository.Default = Layer.effect(
 
     const searchVector = (query: VectorSearchQuery) =>
       Effect.gen(function* () {
-        const vec = Pg.vector(query.embedding);
+        const vec1 = Pg.vector(query.embedding);
+        const vec2 = Pg.vector(query.embedding);
+        const vec3 = Pg.vector(query.embedding);
         const topK = query.topK ?? 10;
-        const threshold = query.threshold ?? 0.0;
+        const thresh = Pg.float8(query.threshold ?? 0.0);
 
         const rows = (
           query.documentId
             ? yield* sql<SearchRow>`
                   SELECT id, document_id, content, metadata,
-                         (1 - (embedding <=> ${vec})) AS score
+                         (1 - (embedding <=> ${vec1})) AS score
                   FROM chunks
                   WHERE document_id = ${query.documentId}
-                    AND (1 - (embedding <=> ${vec})) >= ${threshold}
-                  ORDER BY embedding <=> ${vec} ASC
+                    AND (1 - (embedding <=> ${vec2})) >= ${thresh}
+                  ORDER BY embedding <=> ${vec3} ASC
                   LIMIT ${topK}
                 `
             : yield* sql<SearchRow>`
                   SELECT id, document_id, content, metadata,
-                         (1 - (embedding <=> ${vec})) AS score
+                         (1 - (embedding <=> ${vec1})) AS score
                   FROM chunks
                   WHERE embedding IS NOT NULL
-                    AND (1 - (embedding <=> ${vec})) >= ${threshold}
-                  ORDER BY embedding <=> ${vec} ASC
+                    AND (1 - (embedding <=> ${vec2})) >= ${thresh}
+                  ORDER BY embedding <=> ${vec3} ASC
                   LIMIT ${topK}
                 `
         ) as ReadonlyArray<SearchRow>;

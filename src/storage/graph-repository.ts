@@ -133,6 +133,8 @@ GraphRepository.Default = Layer.effect(
           return [] as ReadonlyArray<EdgeRow>;
         }
         const frontierParam = Pg.array(frontier);
+        const frontierParam2 = Pg.array(frontier);
+        const confParam = Pg.float4(minConfidence);
         const hasTypes = relationTypes && relationTypes.length > 0;
         const typesParam = hasTypes ? Pg.array(relationTypes) : null;
         if (direction === "OUTBOUND") {
@@ -142,7 +144,7 @@ GraphRepository.Default = Layer.effect(
                 FROM edges
                 WHERE source_id = ANY(${frontierParam})
                   AND relation_type = ANY(${typesParam})
-                  AND confidence >= ${minConfidence}
+                  AND confidence >= ${confParam}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>)
@@ -150,7 +152,7 @@ GraphRepository.Default = Layer.effect(
                 SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE source_id = ANY(${frontierParam})
-                  AND confidence >= ${minConfidence}
+                  AND confidence >= ${confParam}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>);
@@ -161,7 +163,7 @@ GraphRepository.Default = Layer.effect(
                 FROM edges
                 WHERE target_id = ANY(${frontierParam})
                   AND relation_type = ANY(${typesParam})
-                  AND confidence >= ${minConfidence}
+                  AND confidence >= ${confParam}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>)
@@ -169,7 +171,7 @@ GraphRepository.Default = Layer.effect(
                 SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
                 WHERE target_id = ANY(${frontierParam})
-                  AND confidence >= ${minConfidence}
+                  AND confidence >= ${confParam}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>);
@@ -178,17 +180,17 @@ GraphRepository.Default = Layer.effect(
             ? ((yield* sql<EdgeRow>`
                 SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
-                WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam}))
+                WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam2}))
                   AND relation_type = ANY(${typesParam})
-                  AND confidence >= ${minConfidence}
+                  AND confidence >= ${confParam}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>)
             : ((yield* sql<EdgeRow>`
                 SELECT source_id, target_id, relation_type, weight, confidence, properties, created_at, updated_at
                 FROM edges
-                WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam}))
-                  AND confidence >= ${minConfidence}
+                WHERE (source_id = ANY(${frontierParam}) OR target_id = ANY(${frontierParam2}))
+                  AND confidence >= ${confParam}
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ${limit}
               `) as ReadonlyArray<EdgeRow>);

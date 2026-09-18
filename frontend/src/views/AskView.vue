@@ -23,7 +23,7 @@ const sampleQuestions = [
   "What is Golem Cloud and how does it achieve durable execution?",
   "Which components depend on PostgreSQL and pgvector?",
   "How does the GraphRAG service extract entities and relationships?",
-  "Explain the role of IngestionCoordinatorAgent.",
+  "How do autonomous task agents schedule recurring ingestion runs?",
 ];
 
 const renderedAnswer = computed(() => {

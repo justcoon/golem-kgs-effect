@@ -51,6 +51,9 @@ export const S3TaskStateSchema = Schema.Struct({
   cursor: Schema.NullOr(Schema.String),
   metrics: S3TaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
+  scheduleRunning: Schema.optional(Schema.Boolean),
+  scheduleIntervalSeconds: Schema.optional(Schema.NullOr(Schema.Number)),
+  lastScheduledAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type S3TaskState = typeof S3TaskStateSchema.Type;
 
@@ -62,6 +65,9 @@ export const S3TaskStatusResponseSchema = Schema.Struct({
   cursor: Schema.NullOr(Schema.String),
   metrics: S3TaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
+  scheduleRunning: Schema.optional(Schema.Boolean),
+  scheduleIntervalSeconds: Schema.optional(Schema.NullOr(Schema.Number)),
+  lastScheduledAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type S3TaskStatusResponse = typeof S3TaskStatusResponseSchema.Type;
 
@@ -107,6 +113,9 @@ export const WebTaskStateSchema = Schema.Struct({
   cursor: Schema.NullOr(Schema.String),
   metrics: WebTaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
+  scheduleRunning: Schema.optional(Schema.Boolean),
+  scheduleIntervalSeconds: Schema.optional(Schema.NullOr(Schema.Number)),
+  lastScheduledAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type WebTaskState = typeof WebTaskStateSchema.Type;
 
@@ -118,6 +127,9 @@ export const WebTaskStatusResponseSchema = Schema.Struct({
   cursor: Schema.NullOr(Schema.String),
   metrics: WebTaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
+  scheduleRunning: Schema.optional(Schema.Boolean),
+  scheduleIntervalSeconds: Schema.optional(Schema.NullOr(Schema.Number)),
+  lastScheduledAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type WebTaskStatusResponse = typeof WebTaskStatusResponseSchema.Type;
 
@@ -178,26 +190,6 @@ export const SyncScheduleSchema = Schema.Struct({
   status: ScheduleStatusSchema,
 });
 export type SyncSchedule = typeof SyncScheduleSchema.Type;
-
-export const CoordinatorMetricsSchema = Schema.Struct({
-  totalRunsTriggered: Schema.Number,
-  totalSuccesses: Schema.Number,
-  totalFailures: Schema.Number,
-});
-export type CoordinatorMetrics = typeof CoordinatorMetricsSchema.Type;
-
-export const CoordinatorStateSchema = Schema.Struct({
-  schedules: Schema.Record(Schema.String, SyncScheduleSchema),
-  aggregatedMetrics: CoordinatorMetricsSchema,
-});
-export type CoordinatorState = typeof CoordinatorStateSchema.Type;
-
-export const CoordinatorStatusResponseSchema = Schema.Struct({
-  schedules: Schema.Array(SyncScheduleSchema),
-  aggregatedMetrics: CoordinatorMetricsSchema,
-});
-export type CoordinatorStatusResponse =
-  typeof CoordinatorStatusResponseSchema.Type;
 
 // --- Knowledge Access Agent Schemas ---
 
