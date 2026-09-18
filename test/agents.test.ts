@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { Effect, Layer, Option, Schema } from "effect";
 import {
   calculateScheduledAt,
-  CoordinatorStateSchema,
   DocumentResultSchema,
   EdgeResultSchema,
   EntityResultSchema,
@@ -92,9 +91,79 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         Schema.decodeUnknownSync(S3TaskStateSchema)(completedState);
       assert.equal(parsedCompleted.status, "COMPLETED");
       assert.equal(parsedCompleted.processedKeys["rfcs/rfc-001.md"], "etag123");
+      assert.equal(parsedCompleted.scheduleRunning ?? false, false);
+      assert.equal(parsedCompleted.scheduleIntervalSeconds ?? null, null);
+
+      // Verify scheduled active state
+      const scheduledState = {
+        ...completedState,
+        scheduleRunning: true,
+        scheduleIntervalSeconds: 300,
+        lastScheduledAt: "2026-09-18T10:00:00.000Z",
+      };
+      const parsedScheduled =
+        Schema.decodeUnknownSync(S3TaskStateSchema)(scheduledState);
+      assert.equal(parsedScheduled.scheduleRunning, true);
+      assert.equal(parsedScheduled.scheduleIntervalSeconds, 300);
+      assert.equal(parsedScheduled.lastScheduledAt, "2026-09-18T10:00:00.000Z");
     });
 
-    it("should validate CoordinatorStateSchema, SyncScheduleSchema, and TaskRunSummarySchema", () => {
+    it("should verify task agent schedule state transitions and logical stop behavior", () => {
+      // 1. Initial idle state
+      let state: S3TaskState = {
+        resourceName: "main",
+        status: "IDLE",
+        lastSyncTimestamp: null,
+        processedKeys: {},
+        cursor: null,
+        metrics: {
+          totalDiscovered: 0,
+          totalSynced: 0,
+          totalFailed: 0,
+          lastDurationMs: 0,
+        },
+        errorMessage: null,
+        scheduleRunning: false,
+        scheduleIntervalSeconds: null,
+        lastScheduledAt: null,
+      };
+
+      // 2. startSchedule transition
+      const intervalSeconds = 120;
+      const nowIso = new Date().toISOString();
+      state = {
+        ...state,
+        scheduleRunning: true,
+        scheduleIntervalSeconds: intervalSeconds,
+        lastScheduledAt: nowIso,
+      };
+      assert.equal(state.scheduleRunning, true);
+      assert.equal(state.scheduleIntervalSeconds, 120);
+      assert.ok(state.lastScheduledAt !== null);
+
+      // 3. Golem host timer calculation
+      const timer = calculateScheduledAt(state.scheduleIntervalSeconds);
+      assert.ok(typeof timer.seconds === "bigint");
+      assert.ok(timer.seconds > 0n);
+      assert.ok(typeof timer.nanoseconds === "number");
+
+      // 4. stopSchedule transition
+      state = {
+        ...state,
+        scheduleRunning: false,
+        scheduleIntervalSeconds: null,
+      };
+      assert.equal(state.scheduleRunning, false);
+      assert.equal(state.scheduleIntervalSeconds, null);
+
+      // 5. Logical stop guard verification: when scheduleRunning is false, scheduled tick is no-op
+      const shouldTickRun =
+        state.scheduleRunning &&
+        typeof state.scheduleIntervalSeconds === "number";
+      assert.equal(shouldTickRun, false);
+    });
+
+    it("should validate SyncScheduleSchema and TaskRunSummarySchema", () => {
       const schedule = {
         sourceType: "s3" as const,
         resourceName: "main",
@@ -117,37 +186,6 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         sourceType: "s3",
         resourceName: "main",
       });
-
-      const coordinatorState = {
-        schedules: {
-          [key]: parsedSched,
-          "s3:archive": {
-            sourceType: "s3" as const,
-            resourceName: "archive",
-            intervalSeconds: 600,
-            lastScheduledAt: null,
-            lastRunAt: null,
-            status: "ACTIVE" as const,
-          },
-        },
-        aggregatedMetrics: {
-          totalRunsTriggered: 10,
-          totalSuccesses: 9,
-          totalFailures: 1,
-        },
-      };
-
-      const parsedCoord = Schema.decodeUnknownSync(CoordinatorStateSchema)(
-        coordinatorState,
-      );
-      assert.equal(parsedCoord.aggregatedMetrics.totalRunsTriggered, 10);
-      assert.ok(parsedCoord.schedules["s3:main"]);
-      assert.ok(parsedCoord.schedules["s3:archive"]);
-      assert.equal(parsedCoord.schedules["s3:main"]?.resourceName, "main");
-      assert.equal(
-        parsedCoord.schedules["s3:archive"]?.resourceName,
-        "archive",
-      );
 
       const runSummary = {
         sourceType: "s3" as const,

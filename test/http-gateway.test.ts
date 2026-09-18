@@ -5,7 +5,6 @@ import path from "node:path";
 import { Schema } from "effect";
 import {
   AnswerResponseSchema,
-  CoordinatorStateSchema,
   DocumentSummarySchema,
   EntityResultSchema,
   EntitySearchRequestSchema,
@@ -13,9 +12,8 @@ import {
   KnowledgeBaseOverviewSchema,
   NeighborhoodResponseSchema,
   PathFindingResultSchema,
+  S3TaskStatusResponseSchema,
   SearchResponseSchema,
-  SyncScheduleSchema,
-  TaskRunSummarySchema,
   WebhookIngestPayloadSchema,
   type WebhookIngestPayload,
 } from "../src/agents/types.js";
@@ -50,8 +48,8 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         "KnowledgeAccessAgent must be deployed",
       );
       assert.ok(
-        manifestContent.includes("IngestionCoordinatorAgent:"),
-        "IngestionCoordinatorAgent must be deployed",
+        !manifestContent.includes("IngestionCoordinatorAgent:"),
+        "IngestionCoordinatorAgent must not be deployed",
       );
       assert.ok(
         manifestContent.includes("S3IngestorTaskAgent:"),
@@ -194,22 +192,23 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.ok(params !== null);
     });
 
-    it("should match IngestionCoordinatorAgent webhook ingress: /api/coordinator/webhook/{sourceType}/{resourceName}", () => {
-      const pattern = "/api/coordinator/webhook/{sourceType}/{resourceName}";
-      const params = matchRoute(
-        pattern,
-        "/api/coordinator/webhook/s3/main-docs",
-      );
+    it("should match S3IngestorTaskAgent webhook ingress: /api/ingestion/s3/{resourceName}/webhook", () => {
+      const pattern = "/api/ingestion/s3/{resourceName}/webhook";
+      const params = matchRoute(pattern, "/api/ingestion/s3/main-docs/webhook");
 
       assert.ok(params !== null);
-      assert.equal(params?.sourceType, "s3");
       assert.equal(params?.resourceName, "main-docs");
     });
 
-    it("should match IngestionCoordinatorAgent status route: /api/coordinator/status", () => {
-      const pattern = "/api/coordinator/status";
-      const params = matchRoute(pattern, "/api/coordinator/status");
+    it("should match WebIngestorTaskAgent webhook ingress: /api/ingestion/web/{resourceName}/webhook", () => {
+      const pattern = "/api/ingestion/web/{resourceName}/webhook";
+      const params = matchRoute(
+        pattern,
+        "/api/ingestion/web/golem-docs/webhook",
+      );
+
       assert.ok(params !== null);
+      assert.equal(params?.resourceName, "golem-docs");
     });
 
     it("should match S3IngestorTaskAgent sync route: /api/ingestion/s3/{resourceName}/sync", () => {
@@ -237,6 +236,44 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
 
       assert.ok(params !== null);
       assert.equal(params?.resourceName, "golem-docs");
+    });
+
+    it("should match S3IngestorTaskAgent schedule start/stop routes", () => {
+      const startPattern = "/api/ingestion/s3/{resourceName}/schedule/start";
+      const stopPattern = "/api/ingestion/s3/{resourceName}/schedule/stop";
+
+      const startParams = matchRoute(
+        startPattern,
+        "/api/ingestion/s3/technical/schedule/start",
+      );
+      assert.ok(startParams !== null);
+      assert.equal(startParams?.resourceName, "technical");
+
+      const stopParams = matchRoute(
+        stopPattern,
+        "/api/ingestion/s3/technical/schedule/stop",
+      );
+      assert.ok(stopParams !== null);
+      assert.equal(stopParams?.resourceName, "technical");
+    });
+
+    it("should match WebIngestorTaskAgent schedule start/stop routes", () => {
+      const startPattern = "/api/ingestion/web/{resourceName}/schedule/start";
+      const stopPattern = "/api/ingestion/web/{resourceName}/schedule/stop";
+
+      const startParams = matchRoute(
+        startPattern,
+        "/api/ingestion/web/golem-docs/schedule/start",
+      );
+      assert.ok(startParams !== null);
+      assert.equal(startParams?.resourceName, "golem-docs");
+
+      const stopParams = matchRoute(
+        stopPattern,
+        "/api/ingestion/web/golem-docs/schedule/stop",
+      );
+      assert.ok(stopParams !== null);
+      assert.equal(stopParams?.resourceName, "golem-docs");
     });
   });
 
@@ -286,31 +323,32 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.deepEqual(decoded.supportedSources, ["s3", "gdrive"]);
     });
 
-    it("should validate CoordinatorStateSchema for GET /api/coordinator/status", () => {
-      const coordinatorRaw = {
-        schedules: {
-          "s3:main": {
-            sourceType: "s3",
-            resourceName: "main",
-            intervalSeconds: 3600,
-            lastScheduledAt: "2026-09-06T19:00:00.000Z",
-            lastRunAt: "2026-09-06T18:00:00.000Z",
-            status: "ACTIVE",
-          },
+    it("should validate S3TaskStatusResponseSchema for GET /api/ingestion/s3/{resourceName}/status", () => {
+      const statusRaw = {
+        resourceName: "main",
+        status: "COMPLETED",
+        lastSyncTimestamp: "2026-09-06T18:00:00.000Z",
+        processedKeys: [{ key: "doc1.md", etag: "etag123" }],
+        cursor: null,
+        metrics: {
+          totalDiscovered: 5,
+          totalSynced: 5,
+          totalFailed: 0,
+          lastDurationMs: 240,
         },
-        aggregatedMetrics: {
-          totalRunsTriggered: 15,
-          totalSuccesses: 14,
-          totalFailures: 1,
-        },
+        errorMessage: null,
+        scheduleRunning: true,
+        scheduleIntervalSeconds: 300,
+        lastScheduledAt: "2026-09-06T18:05:00.000Z",
       };
 
-      const decoded = Schema.decodeUnknownSync(CoordinatorStateSchema)(
-        coordinatorRaw,
+      const decoded = Schema.decodeUnknownSync(S3TaskStatusResponseSchema)(
+        statusRaw,
       );
-      assert.equal(decoded.aggregatedMetrics.totalRunsTriggered, 15);
-      assert.equal(decoded.aggregatedMetrics.totalSuccesses, 14);
-      assert.equal(decoded.schedules["s3:main"].status, "ACTIVE");
+      assert.equal(decoded.resourceName, "main");
+      assert.equal(decoded.status, "COMPLETED");
+      assert.equal(decoded.scheduleRunning, true);
+      assert.equal(decoded.scheduleIntervalSeconds, 300);
     });
 
     it("should validate DocumentSummarySchema for GET /api/knowledge/entities/{id}/documents", () => {
@@ -498,37 +536,17 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(decoded.shortestPathLength, 1);
     });
 
-    it("should validate SyncScheduleSchema for POST /api/coordinator/schedules", () => {
-      const scheduleRaw = {
-        sourceType: "s3",
-        resourceName: "main-docs",
-        intervalSeconds: 1800,
-        lastScheduledAt: null,
-        lastRunAt: null,
-        status: "ACTIVE",
+    it("should validate WebhookIngestPayloadSchema for POST /api/ingestion/s3/{resourceName}/webhook", () => {
+      const webhookRaw = {
+        action: "s3:ObjectCreated:Put",
+        force: true,
       };
 
-      const decoded = Schema.decodeUnknownSync(SyncScheduleSchema)(scheduleRaw);
-      assert.equal(decoded.sourceType, "s3");
-      assert.equal(decoded.intervalSeconds, 1800);
-      assert.equal(decoded.status, "ACTIVE");
-    });
-
-    it("should validate TaskRunSummarySchema for POST /api/coordinator/sync", () => {
-      const runRaw = {
-        sourceType: "s3",
-        resourceName: "main-docs",
-        status: "COMPLETED",
-        syncedCount: 5,
-        failedCount: 0,
-        durationMs: 250,
-        errorMessage: null,
-      };
-
-      const decoded = Schema.decodeUnknownSync(TaskRunSummarySchema)(runRaw);
-      assert.equal(decoded.sourceType, "s3");
-      assert.equal(decoded.status, "COMPLETED");
-      assert.equal(decoded.syncedCount, 5);
+      const decoded: WebhookIngestPayload = Schema.decodeUnknownSync(
+        WebhookIngestPayloadSchema,
+      )(webhookRaw);
+      assert.equal(decoded.action, "s3:ObjectCreated:Put");
+      assert.equal(decoded.force, true);
     });
   });
 });

@@ -22,9 +22,8 @@ flowchart TD
         MCPGW["Golem MCP Gateway<br/>(Streamable HTTP on :9007)"]
 
         subgraph Agents["Agents"]
-            Coord["IngestionCoordinatorAgent<br/>(Durable Singleton Orchestrator)"]
-            S3Worker["S3IngestorTaskAgent<br/>(Durable Worker by Resource)"]
-            WebWorker["WebIngestorTaskAgent<br/>(Durable Worker by Resource)"]
+            S3Worker["S3IngestorTaskAgent<br/>(Durable Autonomous Worker by Resource)"]
+            WebWorker["WebIngestorTaskAgent<br/>(Durable Autonomous Worker by Resource)"]
             Access["KnowledgeAccessAgent<br/>(Ephemeral Query & GraphRAG Gateway)"]
         end
     end
@@ -33,16 +32,15 @@ flowchart TD
     MCPClient -->|Streamable HTTP /mcp| MCPGW
     MCPGW --> Access
     GW --> Access
-    GW --> Coord
     GW --> S3Worker
     GW --> WebWorker
 
-    Coord -->|"RPC: invoke sync()"| S3Worker
-    Coord -->|"RPC: invoke sync()"| WebWorker
+    S3Worker -->|"Self-Scheduling via Host Timers"| S3Worker
     S3Worker -->|"Read Objects"| S3
     S3Worker -->|"Embeddings"| LLM
     S3Worker -->|"Store Chunks, Vectors, Entities, Edges"| PG
 
+    WebWorker -->|"Self-Scheduling via Host Timers"| WebWorker
     WebWorker -->|"Fetch HTML & Sitemaps"| Web
     WebWorker -->|"Embeddings"| LLM
     WebWorker -->|"Store Chunks, Vectors, Entities, Edges"| PG
@@ -169,21 +167,17 @@ The PostgreSQL storage layer enforces strict relational integrity, vector simila
 
 ## Agents & Core Architecture
 
-The system is organized into four specialized Golem agents:
+The system is organized into three specialized Golem agents:
 
-### 1. `IngestionCoordinatorAgent` (Singleton)
+### 1. `S3IngestorTaskAgent` (Durable)
 
-Central supervisor managing sync schedules, external webhook ingress, and dispatching ETL tasks to worker agents. Maintains durable cron schedules, tracks multi-source ingestion progress, and coordinates manual or scheduled sync jobs.
+Dedicated worker agent executing the ETL pipeline for a specific S3 storage target (`main`, `legal`, `technical`). Supports **autonomous self-scheduling** via Golem native host timers (`.schedule(...)`) with durable logical stop and per-resource failure isolation. Also provides direct push webhook ingress. Discovers changed markdown files in S3 buckets using ETags and timestamps, generates embeddings, extracts entity/relation triples, and commits chunks and graph edges to PostgreSQL.
 
-### 2. `S3IngestorTaskAgent` (Durable)
+### 2. `WebIngestorTaskAgent` (Durable)
 
-Dedicated worker agent executing the ETL pipeline for a specific S3 storage target (`main`, `legal`, `technical`). Discovers changed markdown files in S3 buckets using ETags and timestamps, generates embeddings, extracts entity/relation triples, and commits chunks and graph edges to PostgreSQL.
+Dedicated worker agent executing the ETL pipeline for public web targets and documentation sitemaps (`golem-docs`, `effect-specs`). Supports **autonomous self-scheduling** via Golem native host timers (`.schedule(...)`) with durable logical stop and direct push webhook ingress. Discovers pages via `sitemap.xml` or seed URLs, strips navigation chrome, converts HTML to semantic Markdown, streams pages on the fly with $O(1)$ body memory, and commits chunks, embeddings, and graph triples directly to PostgreSQL.
 
-### 3. `WebIngestorTaskAgent` (Durable)
-
-Dedicated worker agent executing the ETL pipeline for public web targets and documentation sitemaps (`golem-docs`, `effect-specs`). Discovers pages via `sitemap.xml` or seed URLs, strips navigation chrome, converts HTML to semantic Markdown, streams pages on the fly with $O(1)$ body memory, and commits chunks, embeddings, and graph triples directly to PostgreSQL.
-
-### 4. `KnowledgeAccessAgent` (Ephemeral / Stateless)
+### 3. `KnowledgeAccessAgent` (Ephemeral / Stateless)
 
 High-throughput query and retrieval interface exposing GraphRAG question answering, hybrid vector/keyword search (RRF), entity resolution, topological neighborhood exploration, and shortest-path graph traversal. Configured with `mode: "ephemeral"` for concurrent, stateless execution. Also serves as the Model Context Protocol (MCP) server.
 
@@ -191,21 +185,21 @@ High-throughput query and retrieval interface exposing GraphRAG question answeri
 
 ## HTTP Endpoints Quick Reference
 
-| Agent                       | Function             | HTTP   | Route                                                  | Description                                                         |
-| :-------------------------- | :------------------- | :----- | :----------------------------------------------------- | :------------------------------------------------------------------ |
-| `IngestionCoordinatorAgent` | `triggerSync`        | `POST` | `/api/coordinator/sync`                                | Trigger a manual sync run for a resource (`s3` or `web`)            |
-| `IngestionCoordinatorAgent` | `registerSchedule`   | `POST` | `/api/coordinator/schedules`                           | Register or update recurring cron sync schedules                    |
-| `IngestionCoordinatorAgent` | `pauseSchedule`      | `POST` | `/api/coordinator/schedules/pause`                     | Pause sync schedule for a resource                                  |
-| `IngestionCoordinatorAgent` | `resumeSchedule`     | `POST` | `/api/coordinator/schedules/resume`                    | Resume paused sync schedule for a resource                          |
-| `IngestionCoordinatorAgent` | `getSystemStatus`    | `GET`  | `/api/coordinator/status`                              | Inspect coordinator state, active schedules, and sync history       |
-| `IngestionCoordinatorAgent` | `ingestWebhook`      | `POST` | `/api/coordinator/webhook/{sourceType}/{resourceName}` | Webhook ingress for external push notifications                     |
-| `S3IngestorTaskAgent`       | `sync`               | `POST` | `/api/ingestion/s3/{resourceName}/sync`                | Incremental S3 ETL sync (embeddings, chunks, graph triples)         |
-| `S3IngestorTaskAgent`       | `getStatus`          | `GET`  | `/api/ingestion/s3/{resourceName}/status`              | S3 sync metrics, processed ETags, and timestamps                    |
-| `S3IngestorTaskAgent`       | `resetCursor`        | `POST` | `/api/ingestion/s3/{resourceName}/reset`               | Reset cursor to force full S3 rescan                                |
-| `WebIngestorTaskAgent`      | `sync`               | `POST` | `/api/ingestion/web/{resourceName}/sync`               | Incremental Web ETL sync (sitemaps, HTML-to-markdown, GraphRAG)     |
-| `WebIngestorTaskAgent`      | `getStatus`          | `GET`  | `/api/ingestion/web/{resourceName}/status`             | Web sync metrics, processed URLs, ETags, and timestamps             |
-| `WebIngestorTaskAgent`      | `resetCursor`        | `POST` | `/api/ingestion/web/{resourceName}/reset`              | Reset cursor to force full Web rescan                               |
-| `KnowledgeAccessAgent`      | `ask`                | `POST` | `/api/knowledge/ask`                                   | GraphRAG question answering with synthesized markdown answer        |
+| Agent                  | Function         | HTTP   | Route                                             | Description                                                         |
+| :--------------------- | :--------------- | :----- | :------------------------------------------------ | :------------------------------------------------------------------ |
+| `S3IngestorTaskAgent`  | `sync`           | `POST` | `/api/ingestion/s3/{resourceName}/sync`           | Incremental S3 ETL sync (embeddings, chunks, graph triples)         |
+| `S3IngestorTaskAgent`  | `getStatus`      | `GET`  | `/api/ingestion/s3/{resourceName}/status`         | S3 sync metrics, processed ETags, and timestamps                    |
+| `S3IngestorTaskAgent`  | `resetCursor`    | `POST` | `/api/ingestion/s3/{resourceName}/reset`          | Reset cursor to force full S3 rescan                                |
+| `S3IngestorTaskAgent`  | `startSchedule`  | `POST` | `/api/ingestion/s3/{resourceName}/schedule/start` | Start recurring synchronization via Golem host timer                |
+| `S3IngestorTaskAgent`  | `stopSchedule`   | `POST` | `/api/ingestion/s3/{resourceName}/schedule/stop`  | Stop recurring synchronization                                      |
+| `S3IngestorTaskAgent`  | `ingestWebhook`  | `POST` | `/api/ingestion/s3/{resourceName}/webhook`        | Push webhook ingress for external change events                     |
+| `WebIngestorTaskAgent` | `sync`           | `POST` | `/api/ingestion/web/{resourceName}/sync`          | Incremental Web ETL sync (sitemaps, HTML-to-markdown, GraphRAG)     |
+| `WebIngestorTaskAgent` | `getStatus`      | `GET`  | `/api/ingestion/web/{resourceName}/status`        | Web sync metrics, processed URLs, ETags, and timestamps             |
+| `WebIngestorTaskAgent` | `resetCursor`    | `POST` | `/api/ingestion/web/{resourceName}/reset`         | Reset cursor to force full Web rescan                               |
+| `WebIngestorTaskAgent` | `startSchedule`  | `POST` | `/api/ingestion/web/{resourceName}/schedule/start`| Start recurring synchronization via Golem host timer                |
+| `WebIngestorTaskAgent` | `stopSchedule`   | `POST` | `/api/ingestion/web/{resourceName}/schedule/stop` | Stop recurring synchronization                                      |
+| `WebIngestorTaskAgent` | `ingestWebhook`  | `POST` | `/api/ingestion/web/{resourceName}/webhook`       | Push webhook ingress for external change events                     |
+| `KnowledgeAccessAgent` | `ask`            | `POST` | `/api/knowledge/ask`                              | GraphRAG question answering with synthesized markdown answer        |
 | `KnowledgeAccessAgent`      | `graphRag`           | `POST` | `/api/knowledge/graphrag`                              | GraphRAG context retrieval bundle (chunks, entities, relationships) |
 | `KnowledgeAccessAgent`      | `search`             | `POST` | `/api/knowledge/search`                                | Hybrid search combining pgvector cosine distance & full-text RRF    |
 | `KnowledgeAccessAgent`      | `searchEntities`     | `POST` | `/api/knowledge/entities/search`                       | Entity search and autocomplete by prefix, name, or alias            |
@@ -431,7 +425,6 @@ httpApi:
       - domain: localhost:9006
         agents:
           KnowledgeAccessAgent: {}
-          IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
           WebIngestorTaskAgent: {}
 ```
@@ -547,6 +540,15 @@ The project includes an automated, isolated end-to-end test pipeline running in 
 npm run test:e2e
 ```
 
+The E2E test runner exercises the entire pipeline end-to-end across 7 test suites:
+1. **Gateway Connectivity & Agent Initialization**: Verifies HTTP gateway connectivity and status for `KnowledgeAccessAgent` and `S3IngestorTaskAgent`.
+2. **S3 Ingestion & Checkpointing**: Triggers S3 sync, polls completion, verifies document/entity persistence in PostgreSQL, and verifies incremental checkpointing skips unchanged files.
+3. **Event-Driven Webhook Ingestion**: Invokes direct task agent webhooks (`/webhook`) and verifies on-demand indexing and document retrieval.
+4. **Multi-Modal Search**: Validates hybrid search with Reciprocal Rank Fusion (RRF), vector semantic search, and keyword search.
+5. **Knowledge Graph Traversal**: Validates degree centrality hub entity listing, entity name/alias search, and 2-hop neighborhood exploration.
+6. **GraphRAG Context Retrieval & Synthesis**: Tests grounded context bundle retrieval and answer synthesis with citations via the `/ask` endpoint.
+7. **Model Context Protocol (MCP) Streamable HTTP Invocations**: Verifies MCP session handshake (`initialize`), dynamic tool discovery (`tools/list` exposing `KnowledgeAccessAgent` tools), and live tool execution (`tools/call` for `search` and `ask`).
+
 
 The Golem HTTP Gateway will be active on **`http://localhost:9006`**, and the Golem MCP Gateway will be active on **`http://localhost:9007/mcp`**.
 
@@ -569,9 +571,21 @@ Open **`http://localhost:5173`** to interact with the Knowledge Graph, Search, a
 ### Synchronize S3 Documents
 
 ```bash
+# Immediate incremental sync
 curl -X POST 'http://localhost:9006/api/ingestion/s3/main/sync' \
   -H 'Content-Type: application/json' \
   -d '{"force": false}'
+
+# Start autonomous recurring sync every 300 seconds using Golem host timer
+curl -X POST 'http://localhost:9006/api/ingestion/s3/main/schedule/start' \
+  -H 'Content-Type: application/json' \
+  -d '{"intervalSeconds": 300}'
+
+# Stop recurring sync
+curl -X POST 'http://localhost:9006/api/ingestion/s3/main/schedule/stop'
+
+# Inspect S3 ingestion metrics, checkpoints, and schedule status
+curl -s 'http://localhost:9006/api/ingestion/s3/main/status'
 ```
 
 ### Synchronize Web Documentation Pages
@@ -582,6 +596,14 @@ curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/sync' \
   -H 'Content-Type: application/json' \
   -d '{"force": false}'
 
+# Start autonomous recurring crawl every 600 seconds using Golem host timer
+curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/schedule/start' \
+  -H 'Content-Type: application/json' \
+  -d '{"intervalSeconds": 600}'
+
+# Stop recurring crawl
+curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/schedule/stop'
+
 # Inspect web ingestion metrics and checkpoints
 curl -s 'http://localhost:9006/api/ingestion/web/golem-docs/status'
 
@@ -589,15 +611,14 @@ curl -s 'http://localhost:9006/api/ingestion/web/golem-docs/status'
 curl -X POST 'http://localhost:9006/api/ingestion/web/golem-docs/reset'
 ```
 
-### Trigger Sync via Coordinator Agent
+### Direct Webhook Ingress
 
 ```bash
-# Dispatches sync job to the appropriate worker agent (s3 or web)
-curl -X POST 'http://localhost:9006/api/coordinator/sync' \
+# Push change event directly to S3 worker agent
+curl -X POST 'http://localhost:9006/api/ingestion/s3/main/webhook' \
   -H 'Content-Type: application/json' \
   -d '{
-    "sourceType": "web",
-    "resourceName": "golem-docs",
+    "action": "s3:ObjectCreated:Put",
     "force": false
   }'
 ```

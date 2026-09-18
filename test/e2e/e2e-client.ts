@@ -9,22 +9,59 @@ import type {
   NeighborhoodResponse,
   SearchResponse,
   S3TaskStatusResponse,
-  TaskRunSummary,
   WebhookIngestPayload,
 } from "../../src/agents/types.js";
 
+export interface McpTool {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema?: Record<string, unknown>;
+}
+
+export interface McpInitializeResult {
+  readonly protocolVersion: string;
+  readonly capabilities: Record<string, unknown>;
+  readonly serverInfo?: {
+    readonly name?: string;
+    readonly version?: string;
+  };
+}
+
+export interface McpToolsListResult {
+  readonly tools: ReadonlyArray<McpTool>;
+  readonly nextCursor?: string;
+}
+
+export interface McpCallToolResult {
+  readonly content: ReadonlyArray<{
+    readonly type: string;
+    readonly text?: string;
+    readonly data?: string;
+    readonly mimeType?: string;
+  }>;
+  readonly isError?: boolean;
+}
+
 export interface E2EClientOptions {
   readonly baseUrl?: string;
+  readonly mcpUrl?: string;
   readonly timeoutMs?: number;
 }
 
 export class E2EClient {
   readonly baseUrl: string;
+  readonly mcpUrl: string;
   readonly timeoutMs: number;
+  private mcpRequestId = 1;
+  private mcpSessionId: string | null = null;
 
   constructor(options: E2EClientOptions = {}) {
     this.baseUrl =
-      options.baseUrl ?? process.env.GOLEM_API_URL ?? "http://localhost:9016";
+      options.baseUrl ?? process.env.GOLEM_API_URL ?? "http://localhost:9006";
+    this.mcpUrl =
+      options.mcpUrl ??
+      process.env.GOLEM_MCP_URL ??
+      "http://localhost:9007/mcp";
     this.timeoutMs = options.timeoutMs ?? 30000;
   }
 
@@ -62,25 +99,23 @@ export class E2EClient {
     }
   }
 
-  // --- Coordinator & Ingestion Endpoints ---
+  // --- Ingestion Task & Webhook Endpoints ---
 
-  async triggerCoordinatorSync(
+  async triggerIngestionSync(
     sourceType: "s3" | "web",
     resourceName: string,
     force = false,
-  ): Promise<TaskRunSummary> {
-    const res = await this.request<TaskRunSummary>(
+  ): Promise<S3TaskStatusResponse> {
+    const res = await this.request<S3TaskStatusResponse>(
       "POST",
-      "/api/coordinator/sync",
+      `/api/ingestion/${sourceType}/${encodeURIComponent(resourceName)}/sync`,
       {
-        sourceType,
-        resourceName,
         force,
       },
     );
     if (res.status !== 200) {
       throw new Error(
-        `triggerCoordinatorSync failed with status ${res.status}: ${JSON.stringify(res.data)}`,
+        `triggerIngestionSync failed with status ${res.status}: ${JSON.stringify(res.data)}`,
       );
     }
     return res.data;
@@ -130,10 +165,10 @@ export class E2EClient {
     sourceType: "s3" | "web",
     resourceName: string,
     payload: WebhookIngestPayload,
-  ): Promise<TaskRunSummary> {
-    const res = await this.request<TaskRunSummary>(
+  ): Promise<S3TaskStatusResponse> {
+    const res = await this.request<S3TaskStatusResponse>(
       "POST",
-      `/api/coordinator/webhook/${sourceType}/${resourceName}`,
+      `/api/ingestion/${sourceType}/${encodeURIComponent(resourceName)}/webhook`,
       { payload },
     );
     if (res.status !== 200) {
@@ -332,5 +367,137 @@ export class E2EClient {
       );
     }
     return res.data;
+  }
+
+  async mcpRequest<T>(method: string, params?: unknown): Promise<T> {
+    const id = this.mcpRequestId++;
+    const payload = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: params ?? {},
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      };
+      if (this.mcpSessionId) {
+        headers["mcp-session-id"] = this.mcpSessionId;
+      }
+
+      const response = await fetch(this.mcpUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const sessId = response.headers.get("mcp-session-id");
+      if (sessId) {
+        this.mcpSessionId = sessId;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          `MCP request '${method}' failed with status ${response.status}: ${await response.text()}`,
+        );
+      }
+
+      const text = await response.text();
+      let rawJson = text.trim();
+
+      // Handle text/event-stream format if returned by Streamable HTTP
+      if (rawJson.includes("data:")) {
+        const lines = rawJson.split("\n");
+        const jsonLine = lines.find((l) => {
+          const content = l
+            .trim()
+            .replace(/^data:\s*/, "")
+            .trim();
+          return content.startsWith("{") || content.startsWith("[");
+        });
+        if (jsonLine) {
+          rawJson = jsonLine
+            .trim()
+            .replace(/^data:\s*/, "")
+            .trim();
+        }
+      }
+
+      const parsed = JSON.parse(rawJson) as {
+        result?: T;
+        error?: { code: number; message: string };
+      };
+      if (parsed.error) {
+        throw new Error(
+          `MCP Error (${parsed.error.code}): ${parsed.error.message}`,
+        );
+      }
+      return parsed.result as T;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async mcpNotify(method: string, params?: unknown): Promise<void> {
+    const payload = {
+      jsonrpc: "2.0",
+      method,
+      params: params ?? {},
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      };
+      if (this.mcpSessionId) {
+        headers["mcp-session-id"] = this.mcpSessionId;
+      }
+
+      await fetch(this.mcpUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async mcpInitialize(): Promise<McpInitializeResult> {
+    const result = await this.mcpRequest<McpInitializeResult>("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: {
+        name: "golem-kgs-e2e",
+        version: "1.0.0",
+      },
+    });
+    await this.mcpNotify("notifications/initialized");
+    return result;
+  }
+
+  async mcpListTools(): Promise<McpToolsListResult> {
+    return this.mcpRequest<McpToolsListResult>("tools/list", {});
+  }
+
+  async mcpCallTool(
+    name: string,
+    args: Record<string, unknown> = {},
+  ): Promise<McpCallToolResult> {
+    return this.mcpRequest<McpCallToolResult>("tools/call", {
+      name,
+      arguments: args,
+    });
   }
 }

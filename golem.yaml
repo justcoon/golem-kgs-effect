@@ -200,14 +200,12 @@ httpApi:
       - domain: localhost:9006
         agents:
           KnowledgeAccessAgent: {}
-          IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
           WebIngestorTaskAgent: {}
     test:
       - domain: localhost:9006
         agents:
           KnowledgeAccessAgent: {}
-          IngestionCoordinatorAgent: {}
           S3IngestorTaskAgent: {}
           WebIngestorTaskAgent: {}
 

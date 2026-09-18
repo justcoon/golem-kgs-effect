@@ -1,8 +1,10 @@
 import { Effect, Ref, Schema } from "effect";
 import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 import {
+  calculateScheduledAt,
   WebTaskStateSchema,
   WebTaskStatusResponseSchema,
+  WebhookIngestPayloadSchema,
   type WebTaskState,
   type WebTaskStatusResponse,
 } from "./types.js";
@@ -16,14 +18,19 @@ const toStatusResponse = (s: WebTaskState): WebTaskStatusResponse => ({
   lastSyncTimestamp: s.lastSyncTimestamp,
   processedUrls: Object.entries(s.processedUrls).map(([url, entry]) => ({
     url,
-    ...entry,
+    etag: entry.etag,
+    lastModified: entry.lastModified,
+    syncedAt: entry.syncedAt,
   })),
   cursor: s.cursor,
   metrics: s.metrics,
   errorMessage: s.errorMessage,
+  scheduleRunning: s.scheduleRunning ?? false,
+  scheduleIntervalSeconds: s.scheduleIntervalSeconds ?? null,
+  lastScheduledAt: s.lastScheduledAt ?? null,
 });
 
-export const WebIngestorTaskAgent = defineAgent({
+export const WebIngestorTaskAgentDefinition = defineAgent({
   name: "WebIngestorTaskAgent",
   description:
     "Durable Web Page / Documentation ingestion task worker bound 1:1 to a web resource target",
@@ -60,33 +67,75 @@ export const WebIngestorTaskAgent = defineAgent({
         "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
     }),
-  },
-}).implement(({ resourceName }, snapshot) =>
-  Effect.gen(function* () {
-    const config = yield* AppAgentConfig;
-    const pipelineLayer = yield* makeWebTaskAgentLayer(config);
-
-    const state = yield* snapshot.init({
-      resourceName,
-      status: "IDLE",
-      lastSyncTimestamp: null,
-      processedUrls: {},
-      cursor: null,
-      metrics: {
-        totalDiscovered: 0,
-        totalSynced: 0,
-        totalFailed: 0,
-        lastDurationMs: 0,
+    startSchedule: method({
+      params: {
+        intervalSeconds: Schema.Number,
       },
-      errorMessage: null,
-    });
+      success: WebTaskStatusResponseSchema,
+      description: "Starts recurring synchronization for this Web resource",
+      http: [Http.post("/schedule/start")],
+    }),
+    stopSchedule: method({
+      params: {},
+      success: WebTaskStatusResponseSchema,
+      description: "Stops recurring synchronization for this Web resource",
+      http: [Http.post("/schedule/stop")],
+    }),
+    scheduledTick: method({
+      params: {},
+      success: Schema.Boolean,
+      description:
+        "Called by Golem host timer to execute scheduled sync and schedule next cycle",
+    }),
+    ingestWebhook: method({
+      params: {
+        payload: WebhookIngestPayloadSchema,
+      },
+      success: WebTaskStatusResponseSchema,
+      description: "Push webhook ingress for external change events",
+      http: [Http.post("/webhook")],
+    }),
+  },
+});
 
-    yield* Effect.logInfo("WebIngestorTaskAgent initialized").pipe(
-      Effect.annotateLogs({ resourceName }),
-    );
+export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
+  ({ resourceName }, snapshot) =>
+    Effect.gen(function* () {
+      const config = yield* AppAgentConfig;
+      const pipelineLayer = yield* makeWebTaskAgentLayer(config);
 
-    return {
-      sync: ({ force }) =>
+      const state = yield* snapshot.init({
+        resourceName,
+        status: "IDLE",
+        lastSyncTimestamp: null,
+        processedUrls: {},
+        cursor: null,
+        metrics: {
+          totalDiscovered: 0,
+          totalSynced: 0,
+          totalFailed: 0,
+          lastDurationMs: 0,
+        },
+        errorMessage: null,
+        scheduleRunning: false,
+        scheduleIntervalSeconds: null,
+        lastScheduledAt: null,
+      });
+
+      yield* Effect.logInfo("WebIngestorTaskAgent initialized").pipe(
+        Effect.annotateLogs({ resourceName }),
+      );
+
+      const scheduleNext = (intervalSeconds: number) =>
+        Effect.gen(function* () {
+          const scheduledAt = calculateScheduledAt(intervalSeconds);
+          const self = yield* WebIngestorTaskAgentDefinition.client.get({
+            resourceName,
+          });
+          yield* self.scheduledTick.schedule(scheduledAt, {});
+        });
+
+      const doSync = (force?: boolean) =>
         Effect.gen(function* () {
           yield* Ref.update(state, (s) => ({
             ...s,
@@ -110,19 +159,77 @@ export const WebIngestorTaskAgent = defineAgent({
             errorMessage: result.errorMessage,
           }));
           return toStatusResponse(updated);
-        }),
+        });
 
-      getStatus: () => Ref.get(state).pipe(Effect.map(toStatusResponse)),
+      return {
+        sync: ({ force }) => doSync(force),
 
-      resetCursor: () =>
-        Ref.updateAndGet(state, (s) => ({
-          ...s,
-          lastSyncTimestamp: null,
-          processedUrls: {},
-          cursor: null,
-          status: "IDLE" as const,
-          errorMessage: null,
-        })).pipe(Effect.map(toStatusResponse)),
-    };
-  }),
+        getStatus: () => Ref.get(state).pipe(Effect.map(toStatusResponse)),
+
+        resetCursor: () =>
+          Ref.updateAndGet(state, (s) => ({
+            ...s,
+            lastSyncTimestamp: null,
+            processedUrls: {},
+            cursor: null,
+            status: "IDLE" as const,
+            errorMessage: null,
+          })).pipe(Effect.map(toStatusResponse)),
+
+        startSchedule: ({ intervalSeconds }) =>
+          Effect.gen(function* () {
+            const nowIso = new Date().toISOString();
+            const updated = yield* Ref.updateAndGet(state, (s) => ({
+              ...s,
+              scheduleRunning: true,
+              scheduleIntervalSeconds: intervalSeconds,
+              lastScheduledAt: nowIso,
+            }));
+            yield* scheduleNext(intervalSeconds);
+            return toStatusResponse(updated);
+          }),
+
+        stopSchedule: () =>
+          Ref.updateAndGet(state, (s) => ({
+            ...s,
+            scheduleRunning: false,
+            scheduleIntervalSeconds: null,
+          })).pipe(Effect.map(toStatusResponse)),
+
+        scheduledTick: () =>
+          Effect.gen(function* () {
+            const current = yield* Ref.get(state);
+            if (
+              !current.scheduleRunning ||
+              typeof current.scheduleIntervalSeconds !== "number"
+            ) {
+              return false;
+            }
+
+            yield* doSync(false);
+
+            const latest = yield* Ref.get(state);
+            if (
+              latest.scheduleRunning &&
+              typeof latest.scheduleIntervalSeconds === "number"
+            ) {
+              const nowIso = new Date().toISOString();
+              yield* Ref.update(state, (s) => ({
+                ...s,
+                lastScheduledAt: nowIso,
+              }));
+              yield* scheduleNext(latest.scheduleIntervalSeconds);
+            }
+            return true;
+          }).pipe(Effect.orDie),
+
+        ingestWebhook: ({ payload }) =>
+          Effect.gen(function* () {
+            yield* Effect.logInfo(
+              `Push webhook received for web:${resourceName} (action=${payload.action ?? "default"})`,
+            );
+            return yield* doSync(payload.force);
+          }),
+      };
+    }),
 );

@@ -56,13 +56,16 @@ S3_PORT="${S3_PORT:-9010}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 GOLEM_TEST_ROUTER_PORT="${GOLEM_TEST_ROUTER_PORT:-9881}"
 GOLEM_TEST_CUSTOM_PORT="${GOLEM_TEST_CUSTOM_PORT:-9006}"
+GOLEM_TEST_MCP_PORT="${GOLEM_TEST_MCP_PORT:-9007}"
 GOLEM_API_URL="http://localhost:${GOLEM_TEST_CUSTOM_PORT}"
-export GOLEM_API_URL
+GOLEM_MCP_URL="http://localhost:${GOLEM_TEST_MCP_PORT}/mcp"
+export GOLEM_API_URL GOLEM_MCP_URL
 
 log_info "E2E Configuration:"
 echo "  - Golem Version:   ${GOLEM_VERSION:-1.5.10}"
 echo "  - Golem Router:    http://localhost:${GOLEM_TEST_ROUTER_PORT}"
 echo "  - Golem HTTP API:  ${GOLEM_API_URL}"
+echo "  - Golem MCP API:   ${GOLEM_MCP_URL}"
 echo "  - PostgreSQL:      ${POSTGRES_HOST:-postgres-e2e}:${POSTGRES_PORT} (${POSTGRES_DB:-golem_kg_e2e})"
 echo "  - RustFS S3:       http://localhost:${S3_HOST_PORT:-9010}"
 echo "  - Ollama Port:     ${OLLAMA_PORT}"
@@ -142,7 +145,7 @@ log_info "Deploying application to containerized Golem test server..."
 # Deploy using the test environment defined in golem.yaml
 golem -E test deploy
 
-# Step 5: Wait for HTTP Gateway endpoints
+# Step 5: Wait for HTTP and MCP Gateway endpoints
 log_info "Verifying HTTP Gateway readiness on $GOLEM_API_URL/api/knowledge/overview..."
 for i in {1..20}; do
   if curl -sf "$GOLEM_API_URL/api/knowledge/overview" >/dev/null 2>&1; then
@@ -151,6 +154,22 @@ for i in {1..20}; do
   fi
   if [ "$i" -eq 20 ]; then
     log_err "HTTP Gateway not responding at $GOLEM_API_URL/api/knowledge/overview."
+    exit 1
+  fi
+  sleep 1
+done
+
+log_info "Verifying MCP Gateway readiness on $GOLEM_MCP_URL..."
+for i in {1..20}; do
+  if curl -sf -X POST "$GOLEM_MCP_URL" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"healthcheck","version":"1.0.0"}}}' >/dev/null 2>&1; then
+    log_succ "MCP Gateway is responsive!"
+    break
+  fi
+  if [ "$i" -eq 20 ]; then
+    log_err "MCP Gateway not responding at $GOLEM_MCP_URL."
     exit 1
   fi
   sleep 1

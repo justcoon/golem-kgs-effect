@@ -4,7 +4,8 @@ import { E2EClient } from "./e2e-client.js";
 
 describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
   const client = new E2EClient({
-    baseUrl: process.env.GOLEM_API_URL || "http://localhost:9016",
+    baseUrl: process.env.GOLEM_API_URL || "http://localhost:9006",
+    mcpUrl: process.env.GOLEM_MCP_URL || "http://localhost:9007/mcp",
     timeoutMs: 45000,
   });
 
@@ -41,8 +42,7 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
 
   describe("Suite 2: S3 Ingestion, Storage Persistence & Checkpointing", () => {
     it("should trigger S3 sync and poll until task completes", async () => {
-      const summary = await client.triggerCoordinatorSync("s3", "main", true);
-      assert.equal(summary.sourceType, "s3");
+      const summary = await client.triggerIngestionSync("s3", "main", true);
       assert.equal(summary.resourceName, "main");
 
       const finalStatus = await client.pollS3SyncCompletion(
@@ -77,8 +77,8 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
     });
 
     it("should verify incremental checkpointing skips unchanged files on subsequent sync", async () => {
-      const summary = await client.triggerCoordinatorSync("s3", "main", false);
-      assert.equal(summary.sourceType, "s3");
+      const summary = await client.triggerIngestionSync("s3", "main", false);
+      assert.equal(summary.resourceName, "main");
 
       const statusAfter = await client.pollS3SyncCompletion(
         "main",
@@ -94,7 +94,7 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
   });
 
   describe("Suite 3: Event-Driven Webhook Ingestion", () => {
-    it("should trigger a sync via coordinator webhook", async () => {
+    it("should trigger a sync via direct task agent webhook", async () => {
       const summary = await client.sendWebhook("s3", "main", {
         action: "sync",
         force: true,
@@ -102,8 +102,8 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
 
       assert.equal(summary.status, "COMPLETED");
       assert.ok(
-        typeof summary.syncedCount === "number",
-        "syncedCount must be a number",
+        typeof summary.metrics.totalSynced === "number",
+        "totalSynced must be a number",
       );
     });
 
@@ -233,10 +233,7 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
         bundle.relevantChunks.length > 0,
         "GraphRAG must retrieve matching chunks",
       );
-      assert.ok(
-        Array.isArray(bundle.entities),
-        "Entities must be an array",
-      );
+      assert.ok(Array.isArray(bundle.entities), "Entities must be an array");
       assert.ok(
         Array.isArray(bundle.relationships),
         "Relationships must be an array",
@@ -271,6 +268,100 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
       const firstCitation = response.citations[0];
       assert.ok(firstCitation.chunkId, "Citation must contain chunkId");
       assert.ok(firstCitation.documentId, "Citation must contain documentId");
+    });
+  });
+
+  describe("Suite 7: Model Context Protocol (MCP) Streamable HTTP Invocations", () => {
+    it("should initialize MCP session and verify protocol capabilities", async () => {
+      const initResult = await client.mcpInitialize();
+      assert.ok(initResult, "Init result must be returned");
+      assert.ok(
+        typeof initResult.protocolVersion === "string",
+        "protocolVersion must be string",
+      );
+      assert.ok(
+        initResult.capabilities !== undefined,
+        "capabilities must be present",
+      );
+    });
+
+    it("should list MCP tools and expose KnowledgeAccessAgent tools with schemas", async () => {
+      const toolsList = await client.mcpListTools();
+      assert.ok(Array.isArray(toolsList.tools), "tools must be an array");
+      assert.ok(
+        toolsList.tools.length > 0,
+        "MCP gateway must expose at least one tool",
+      );
+
+      const toolNames = toolsList.tools.map((t) => t.name);
+      assert.ok(
+        toolNames.some((n) => n.includes("search")),
+        `Expected search tool in MCP tools list, got: ${toolNames.join(", ")}`,
+      );
+      assert.ok(
+        toolNames.some((n) => n.includes("ask")),
+        `Expected ask tool in MCP tools list, got: ${toolNames.join(", ")}`,
+      );
+    });
+
+    it("should execute KnowledgeAccessAgent search via MCP tools/call", async () => {
+      const toolsList = await client.mcpListTools();
+      const searchTool = toolsList.tools.find((t) => t.name.includes("search"));
+      assert.ok(searchTool, "Search tool must exist");
+
+      const callResult = await client.mcpCallTool(searchTool.name, {
+        query: "Golem durable execution",
+        limit: 3,
+        searchType: "hybrid",
+      });
+
+      assert.ok(
+        !callResult.isError,
+        "MCP tool execution must not indicate error",
+      );
+      assert.ok(
+        Array.isArray(callResult.content),
+        "Tool call result content must be an array",
+      );
+      assert.ok(
+        callResult.content.length > 0,
+        "Tool call content must not be empty",
+      );
+
+      const textContent = callResult.content
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text)
+        .join("\n");
+      assert.ok(
+        textContent.length > 0,
+        "Tool call response must contain text output",
+      );
+    });
+
+    it("should execute KnowledgeAccessAgent ask via MCP tools/call", async () => {
+      const toolsList = await client.mcpListTools();
+      const askTool = toolsList.tools.find((t) => t.name.includes("ask"));
+      assert.ok(askTool, "Ask tool must exist");
+
+      const callResult = await client.mcpCallTool(askTool.name, {
+        query: "How does Golem achieve durability?",
+        topK: 3,
+        maxHops: 2,
+        generateAnswer: true,
+      });
+
+      assert.ok(!callResult.isError);
+      assert.ok(Array.isArray(callResult.content));
+      assert.ok(callResult.content.length > 0);
+
+      const textContent = callResult.content
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text)
+        .join("\n");
+      assert.ok(
+        textContent.length > 0,
+        "Ask tool response must return text output",
+      );
     });
   });
 });
