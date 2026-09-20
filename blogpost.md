@@ -185,7 +185,7 @@ Our platform implements three specialized agents defined with `@golemcloud/effec
 │  │   S3IngestorTaskAgent        │    │ KnowledgeAccess  │   │
 │  │   • Autonomous Host Timers   │    │ Agent            │   │
 │  │   • State Snapshots (Oplog)  │    │ • Hybrid Search  │   │
-│  │   • Resource ETag Cursors    │    │ • GraphRAG Q&A   │   │
+│  │   • Status & Sync Metrics    │    │ • GraphRAG Q&A   │   │
 │  └──────────────────────────────┘    │ • BFS Traversal  │   │
 │  ┌──────────────────────────────┐    │ • MCP Server     │   │
 │  │   WebIngestorTaskAgent       │    └──────────────────┘   │
@@ -198,7 +198,7 @@ Our platform implements three specialized agents defined with `@golemcloud/effec
 
 ### Agent 1: `S3IngestorTaskAgent` (Durable ETL Worker)
 
-The [`S3IngestorTaskAgent`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/s3-task-agent.ts) is partitioned 1:1 by S3 resource name (e.g., `main`, `legal`, `technical`). Each agent instance maintains durable state (processed keys, ETags, sync metrics, and scheduling status) and takes periodic snapshots using Golem's `Snapshot.define`.
+The [`S3IngestorTaskAgent`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/s3-task-agent.ts) is partitioned 1:1 by S3 resource name (e.g., `main`, `legal`, `technical`). Each agent instance maintains a lightweight durable state (lifecycle status, sync metrics, error logs, and scheduling status) and takes periodic snapshots using Golem's `Snapshot.define`. Incremental synchronization state (ETags and file timestamps) is persisted in the PostgreSQL `sync_checkpoints` table via [`CheckpointRepository`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/storage/checkpoint-repository.ts), keeping the agent's durable snapshot footprint minimal (`< 1 KB`).
 
 #### Agent Interface Definition
 
@@ -277,7 +277,7 @@ If the host server reboots or migrates, Golem preserves the durable timer and ex
 
 ### Agent 2: `WebIngestorTaskAgent` (Durable Web Worker)
 
-The [`WebIngestorTaskAgent`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/web-task-agent.ts) is partitioned 1:1 by web resource (e.g., `golem-docs`, `effect-specs`). It discovers web pages using `sitemap.xml` parsing or URL frontier traversal, converts HTML to clean Markdown, and streams processing with $O(1)$ body memory.
+The [`WebIngestorTaskAgent`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/web-task-agent.ts) is partitioned 1:1 by web resource (e.g., `golem-docs`, `effect-specs`). It discovers web pages using `sitemap.xml` parsing or URL frontier traversal, converts HTML to clean Markdown, and streams processing with $O(1)$ body memory. Like the S3 agent, it persists URL ETags and content hashes directly to the PostgreSQL `sync_checkpoints` table, keeping its durable snapshot lightweight.
 
 #### Agent Interface Definition
 

@@ -188,13 +188,13 @@ High-throughput query and retrieval interface exposing GraphRAG question answeri
 | Agent                  | Function         | HTTP   | Route                                             | Description                                                         |
 | :--------------------- | :--------------- | :----- | :------------------------------------------------ | :------------------------------------------------------------------ |
 | `S3IngestorTaskAgent`  | `sync`           | `POST` | `/api/ingestion/s3/{resourceName}/sync`           | Incremental S3 ETL sync (embeddings, chunks, graph triples)         |
-| `S3IngestorTaskAgent`  | `getStatus`      | `GET`  | `/api/ingestion/s3/{resourceName}/status`         | S3 sync metrics, processed ETags, and timestamps                    |
+| `S3IngestorTaskAgent`  | `getStatus`      | `GET`  | `/api/ingestion/s3/{resourceName}/status`         | S3 sync metrics, execution status, and timestamps                   |
 | `S3IngestorTaskAgent`  | `resetCursor`    | `POST` | `/api/ingestion/s3/{resourceName}/reset`          | Reset cursor to force full S3 rescan                                |
 | `S3IngestorTaskAgent`  | `startSchedule`  | `POST` | `/api/ingestion/s3/{resourceName}/schedule/start` | Start recurring synchronization via Golem host timer                |
 | `S3IngestorTaskAgent`  | `stopSchedule`   | `POST` | `/api/ingestion/s3/{resourceName}/schedule/stop`  | Stop recurring synchronization                                      |
 | `S3IngestorTaskAgent`  | `ingestWebhook`  | `POST` | `/api/ingestion/s3/{resourceName}/webhook`        | Push webhook ingress for external change events                     |
 | `WebIngestorTaskAgent` | `sync`           | `POST` | `/api/ingestion/web/{resourceName}/sync`          | Incremental Web ETL sync (sitemaps, HTML-to-markdown, GraphRAG)     |
-| `WebIngestorTaskAgent` | `getStatus`      | `GET`  | `/api/ingestion/web/{resourceName}/status`        | Web sync metrics, processed URLs, ETags, and timestamps             |
+| `WebIngestorTaskAgent` | `getStatus`      | `GET`  | `/api/ingestion/web/{resourceName}/status`        | Web sync metrics, execution status, and timestamps                  |
 | `WebIngestorTaskAgent` | `resetCursor`    | `POST` | `/api/ingestion/web/{resourceName}/reset`         | Reset cursor to force full Web rescan                               |
 | `WebIngestorTaskAgent` | `startSchedule`  | `POST` | `/api/ingestion/web/{resourceName}/schedule/start`| Start recurring synchronization via Golem host timer                |
 | `WebIngestorTaskAgent` | `stopSchedule`   | `POST` | `/api/ingestion/web/{resourceName}/schedule/stop` | Stop recurring synchronization                                      |

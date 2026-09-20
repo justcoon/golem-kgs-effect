@@ -134,6 +134,22 @@ export class E2EClient {
     return res.data;
   }
 
+  async resetCursor(
+    sourceType: "s3" | "web",
+    resourceName: string,
+  ): Promise<S3TaskStatusResponse> {
+    const res = await this.request<S3TaskStatusResponse>(
+      "POST",
+      `/api/ingestion/${sourceType}/${encodeURIComponent(resourceName)}/reset`,
+    );
+    if (res.status !== 200) {
+      throw new Error(
+        `resetCursor failed with status ${res.status}: ${JSON.stringify(res.data)}`,
+      );
+    }
+    return res.data;
+  }
+
   async pollS3SyncCompletion(
     resourceName: string,
     timeoutMs = 60000,

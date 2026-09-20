@@ -328,7 +328,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         resourceName: "main",
         status: "COMPLETED",
         lastSyncTimestamp: "2026-09-06T18:00:00.000Z",
-        processedKeys: [{ key: "doc1.md", etag: "etag123" }],
         cursor: null,
         metrics: {
           totalDiscovered: 5,
