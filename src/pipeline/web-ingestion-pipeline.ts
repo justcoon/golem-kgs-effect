@@ -19,7 +19,6 @@ import {
 export interface WebIngestionRunResult {
   readonly status: "COMPLETED" | "FAILED";
   readonly lastSyncTimestamp: string | null;
-  readonly processedUrls: Record<string, WebProcessedUrlEntry>;
   readonly cursor: string | null;
   readonly metrics: WebTaskMetrics;
   readonly errorMessage: string | null;
@@ -52,12 +51,27 @@ export function runWebIngestion(
 
     const connector = yield* webService.createConnector(resourceName);
 
+    const existingCheckpoint = yield* checkpointRepo.getCheckpoint(
+      `web_${resourceName}`,
+    );
+    const cursorObj = Option.isSome(existingCheckpoint)
+      ? (existingCheckpoint.value.cursorData as {
+          lastSyncTimestamp?: string;
+          processedUrls?: Record<string, WebProcessedUrlEntry>;
+          continuationToken?: string;
+        } | null)
+      : null;
+
+    const lastSyncTimestamp =
+      cursorObj?.lastSyncTimestamp ?? currentState.lastSyncTimestamp;
+    const existingProcessedUrls = cursorObj?.processedUrls ?? {};
+
     const cursorData: Option.Option<WebCursorData> =
-      force || !currentState.lastSyncTimestamp
+      force || !lastSyncTimestamp
         ? Option.none()
         : Option.some({
-            lastSyncTimestamp: currentState.lastSyncTimestamp,
-            processedUrls: currentState.processedUrls,
+            lastSyncTimestamp,
+            processedUrls: existingProcessedUrls,
           });
 
     const processedRef = yield* Ref.make<
@@ -65,7 +79,7 @@ export function runWebIngestion(
     >(
       force
         ? HashMap.empty()
-        : HashMap.fromIterable(Object.entries(currentState.processedUrls)),
+        : HashMap.fromIterable(Object.entries(existingProcessedUrls)),
     );
 
     const discoveredCountRef = yield* Ref.make(0);
@@ -192,7 +206,6 @@ export function runWebIngestion(
     return {
       status,
       lastSyncTimestamp: nowIso,
-      processedUrls: finalProcessedUrls,
       cursor: null,
       metrics: {
         totalDiscovered: currentState.metrics.totalDiscovered + discoveredCount,
@@ -207,7 +220,6 @@ export function runWebIngestion(
       Effect.succeed({
         status: "FAILED" as const,
         lastSyncTimestamp: currentState.lastSyncTimestamp,
-        processedUrls: currentState.processedUrls,
         cursor: currentState.cursor,
         metrics: {
           ...currentState.metrics,

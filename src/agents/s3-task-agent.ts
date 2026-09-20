@@ -11,15 +11,12 @@ import {
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeS3TaskAgentLayer } from "./agent-pipeline-layer.js";
 import { runS3Ingestion } from "../pipeline/s3-ingestion-pipeline.js";
+import { CheckpointRepository } from "../storage/index.js";
 
 const toStatusResponse = (s: S3TaskState): S3TaskStatusResponse => ({
   resourceName: s.resourceName,
   status: s.status,
   lastSyncTimestamp: s.lastSyncTimestamp,
-  processedKeys: Object.entries(s.processedKeys).map(([key, etag]) => ({
-    key,
-    etag,
-  })),
   cursor: s.cursor,
   metrics: s.metrics,
   errorMessage: s.errorMessage,
@@ -106,7 +103,6 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
         resourceName,
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedKeys: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -151,7 +147,6 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
             ...s,
             status: result.status,
             lastSyncTimestamp: result.lastSyncTimestamp,
-            processedKeys: result.processedKeys,
             cursor: result.cursor,
             metrics: result.metrics,
             errorMessage: result.errorMessage,
@@ -165,14 +160,23 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
         getStatus: () => Ref.get(state).pipe(Effect.map(toStatusResponse)),
 
         resetCursor: () =>
-          Ref.updateAndGet(state, (s) => ({
-            ...s,
-            lastSyncTimestamp: null,
-            processedKeys: {},
-            cursor: null,
-            status: "IDLE" as const,
-            errorMessage: null,
-          })).pipe(Effect.map(toStatusResponse)),
+          Effect.gen(function* () {
+            const checkpointRepo = yield* CheckpointRepository.pipe(
+              Effect.provide(pipelineLayer),
+            );
+            yield* checkpointRepo
+              .deleteCheckpoint(`s3_${resourceName}`)
+              .pipe(Effect.ignore);
+
+            const updated = yield* Ref.updateAndGet(state, (s) => ({
+              ...s,
+              lastSyncTimestamp: null,
+              cursor: null,
+              status: "IDLE" as const,
+              errorMessage: null,
+            }));
+            return toStatusResponse(updated);
+          }),
 
         startSchedule: ({ intervalSeconds }) =>
           Effect.gen(function* () {

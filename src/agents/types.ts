@@ -37,17 +37,10 @@ export const S3TaskStatusSchema = Schema.Literals([
 ]);
 export type S3TaskStatus = typeof S3TaskStatusSchema.Type;
 
-export const S3ProcessedKeyEntrySchema = Schema.Struct({
-  key: Schema.String,
-  etag: Schema.String,
-});
-export type S3ProcessedKeyEntry = typeof S3ProcessedKeyEntrySchema.Type;
-
 export const S3TaskStateSchema = Schema.Struct({
   resourceName: Schema.String,
   status: S3TaskStatusSchema,
   lastSyncTimestamp: Schema.NullOr(Schema.String),
-  processedKeys: Schema.Record(Schema.String, Schema.String),
   cursor: Schema.NullOr(Schema.String),
   metrics: S3TaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
@@ -61,7 +54,6 @@ export const S3TaskStatusResponseSchema = Schema.Struct({
   resourceName: Schema.String,
   status: S3TaskStatusSchema,
   lastSyncTimestamp: Schema.NullOr(Schema.String),
-  processedKeys: Schema.Array(S3ProcessedKeyEntrySchema),
   cursor: Schema.NullOr(Schema.String),
   metrics: S3TaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
@@ -96,20 +88,10 @@ export const WebProcessedUrlEntrySchema = Schema.Struct({
 });
 export type WebProcessedUrlEntry = typeof WebProcessedUrlEntrySchema.Type;
 
-export const WebProcessedUrlStatusEntrySchema = Schema.Struct({
-  url: Schema.String,
-  etag: Schema.optional(Schema.String),
-  lastModified: Schema.optional(Schema.String),
-  syncedAt: Schema.optional(Schema.String),
-});
-export type WebProcessedUrlStatusEntry =
-  typeof WebProcessedUrlStatusEntrySchema.Type;
-
 export const WebTaskStateSchema = Schema.Struct({
   resourceName: Schema.String,
   status: WebTaskStatusSchema,
   lastSyncTimestamp: Schema.NullOr(Schema.String),
-  processedUrls: Schema.Record(Schema.String, WebProcessedUrlEntrySchema),
   cursor: Schema.NullOr(Schema.String),
   metrics: WebTaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),
@@ -123,7 +105,6 @@ export const WebTaskStatusResponseSchema = Schema.Struct({
   resourceName: Schema.String,
   status: WebTaskStatusSchema,
   lastSyncTimestamp: Schema.NullOr(Schema.String),
-  processedUrls: Schema.Array(WebProcessedUrlStatusEntrySchema),
   cursor: Schema.NullOr(Schema.String),
   metrics: WebTaskMetricsSchema,
   errorMessage: Schema.NullOr(Schema.String),

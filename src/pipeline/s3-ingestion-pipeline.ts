@@ -15,7 +15,6 @@ import {
 export interface IngestionRunResult {
   readonly status: "COMPLETED" | "FAILED";
   readonly lastSyncTimestamp: string | null;
-  readonly processedKeys: Record<string, string>;
   readonly cursor: string | null;
   readonly metrics: S3TaskMetrics;
   readonly errorMessage: string | null;
@@ -48,19 +47,35 @@ export function runS3Ingestion(
 
     const connector = yield* s3Service.createConnector(resourceName);
 
+    const existingCheckpoint = yield* checkpointRepo.getCheckpoint(
+      `s3_${resourceName}`,
+    );
+    const cursorObj = Option.isSome(existingCheckpoint)
+      ? (existingCheckpoint.value.cursorData as {
+          lastSyncTimestamp?: string;
+          processedKeys?: Record<string, string>;
+          continuationToken?: string;
+        } | null)
+      : null;
+
+    const lastSyncTimestamp =
+      cursorObj?.lastSyncTimestamp ?? currentState.lastSyncTimestamp;
+    const existingProcessedKeys = cursorObj?.processedKeys ?? {};
+
     const cursorData: Option.Option<S3CursorData> =
-      force || !currentState.lastSyncTimestamp
+      force || !lastSyncTimestamp
         ? Option.none()
         : Option.some({
-            lastSyncTimestamp: currentState.lastSyncTimestamp,
-            processedKeys: currentState.processedKeys,
-            continuationToken: currentState.cursor ?? undefined,
+            lastSyncTimestamp,
+            processedKeys: existingProcessedKeys,
+            continuationToken:
+              currentState.cursor ?? cursorObj?.continuationToken ?? undefined,
           });
 
     const processedRef = yield* Ref.make<HashMap.HashMap<string, string>>(
       force
         ? HashMap.empty()
-        : HashMap.fromIterable(Object.entries(currentState.processedKeys)),
+        : HashMap.fromIterable(Object.entries(existingProcessedKeys)),
     );
 
     const discoveredCountRef = yield* Ref.make(0);
@@ -146,7 +161,6 @@ export function runS3Ingestion(
     return {
       status,
       lastSyncTimestamp: nowIso,
-      processedKeys: finalProcessedKeys,
       cursor: null,
       metrics: {
         totalDiscovered: currentState.metrics.totalDiscovered + totalDiscovered,
@@ -161,7 +175,6 @@ export function runS3Ingestion(
       Effect.succeed({
         status: "FAILED" as const,
         lastSyncTimestamp: currentState.lastSyncTimestamp,
-        processedKeys: currentState.processedKeys,
         cursor: currentState.cursor,
         metrics: {
           ...currentState.metrics,

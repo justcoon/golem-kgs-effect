@@ -11,17 +11,12 @@ import {
 import { AppAgentConfig } from "../config/agent-config.js";
 import { makeWebTaskAgentLayer } from "./agent-pipeline-layer.js";
 import { runWebIngestion } from "../pipeline/web-ingestion-pipeline.js";
+import { CheckpointRepository } from "../storage/index.js";
 
 const toStatusResponse = (s: WebTaskState): WebTaskStatusResponse => ({
   resourceName: s.resourceName,
   status: s.status,
   lastSyncTimestamp: s.lastSyncTimestamp,
-  processedUrls: Object.entries(s.processedUrls).map(([url, entry]) => ({
-    url,
-    etag: entry.etag,
-    lastModified: entry.lastModified,
-    syncedAt: entry.syncedAt,
-  })),
   cursor: s.cursor,
   metrics: s.metrics,
   errorMessage: s.errorMessage,
@@ -108,7 +103,6 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
         resourceName,
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedUrls: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -153,7 +147,6 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
             ...s,
             status: result.status,
             lastSyncTimestamp: result.lastSyncTimestamp,
-            processedUrls: result.processedUrls,
             cursor: result.cursor,
             metrics: result.metrics,
             errorMessage: result.errorMessage,
@@ -167,14 +160,23 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
         getStatus: () => Ref.get(state).pipe(Effect.map(toStatusResponse)),
 
         resetCursor: () =>
-          Ref.updateAndGet(state, (s) => ({
-            ...s,
-            lastSyncTimestamp: null,
-            processedUrls: {},
-            cursor: null,
-            status: "IDLE" as const,
-            errorMessage: null,
-          })).pipe(Effect.map(toStatusResponse)),
+          Effect.gen(function* () {
+            const checkpointRepo = yield* CheckpointRepository.pipe(
+              Effect.provide(pipelineLayer),
+            );
+            yield* checkpointRepo
+              .deleteCheckpoint(`web_${resourceName}`)
+              .pipe(Effect.ignore);
+
+            const updated = yield* Ref.updateAndGet(state, (s) => ({
+              ...s,
+              lastSyncTimestamp: null,
+              cursor: null,
+              status: "IDLE" as const,
+              errorMessage: null,
+            }));
+            return toStatusResponse(updated);
+          }),
 
         startSchedule: ({ intervalSeconds }) =>
           Effect.gen(function* () {

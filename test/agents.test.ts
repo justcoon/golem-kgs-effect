@@ -15,8 +15,14 @@ import {
   toScheduleKey,
   parseScheduleKey,
   type S3TaskState,
+  type WebTaskState,
 } from "../src/agents/types.js";
 import { S3ConnectorService } from "../src/connectors/s3-connector.js";
+import {
+  WebConnectorService,
+  WebPageConnector,
+} from "../src/connectors/web-connector.js";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import {
   DocumentRepository,
   type DocumentRepositoryShape,
@@ -36,6 +42,7 @@ import {
   GraphRAGService,
 } from "../src/pipeline/index.js";
 import { runS3Ingestion } from "../src/pipeline/s3-ingestion-pipeline.js";
+import { runWebIngestion } from "../src/pipeline/web-ingestion-pipeline.js";
 import { type RawDocument } from "../src/domain/provenance.js";
 import { type CreateChunkInput } from "../src/domain/chunk.js";
 import {
@@ -58,7 +65,6 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         resourceName: "main",
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedKeys: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -78,7 +84,6 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         ...idleState,
         status: "COMPLETED" as const,
         lastSyncTimestamp: "2026-09-06T12:00:00.000Z",
-        processedKeys: { "rfcs/rfc-001.md": "etag123" },
         metrics: {
           totalDiscovered: 1,
           totalSynced: 1,
@@ -90,7 +95,6 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
       const parsedCompleted =
         Schema.decodeUnknownSync(S3TaskStateSchema)(completedState);
       assert.equal(parsedCompleted.status, "COMPLETED");
-      assert.equal(parsedCompleted.processedKeys["rfcs/rfc-001.md"], "etag123");
       assert.equal(parsedCompleted.scheduleRunning ?? false, false);
       assert.equal(parsedCompleted.scheduleIntervalSeconds ?? null, null);
 
@@ -114,7 +118,6 @@ describe("Phase 4 Durable Agents & Orchestration", () => {
         resourceName: "main",
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedKeys: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -590,7 +593,6 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         resourceName: "main",
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedKeys: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -612,9 +614,6 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       assert.equal(result.metrics.totalSynced, 2);
       assert.equal(result.metrics.totalFailed, 0);
       assert.ok(result.lastSyncTimestamp !== null);
-      assert.equal(result.processedKeys["rfcs/rfc-001.md"], "etag_rfc_1");
-      assert.equal(result.processedKeys["specs/spec-001.md"], "etag_spec_1");
-      assert.equal(result.processedKeys["ignored/notes.txt"], undefined);
 
       // Verify documents were saved
       assert.equal(savedDocs.size, 2);
@@ -635,10 +634,16 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
           entityNames.includes("PostgreSQL"),
       );
 
-      // Verify checkpoint was saved
+      // Verify checkpoint was saved with processedKeys
       assert.ok(savedCheckpoints.has("s3_main"));
       const checkpoint = savedCheckpoints.get("s3_main")!;
       assert.equal(checkpoint.status, "COMPLETED");
+      const cursorData = checkpoint.cursorData as {
+        processedKeys?: Record<string, string>;
+      };
+      assert.equal(cursorData.processedKeys?.["rfcs/rfc-001.md"], "etag_rfc_1");
+      assert.equal(cursorData.processedKeys?.["specs/spec-001.md"], "etag_spec_1");
+      assert.equal(cursorData.processedKeys?.["ignored/notes.txt"], undefined);
     });
 
     it("should skip unmodified documents on incremental sync", async () => {
@@ -646,10 +651,6 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         resourceName: "main",
         status: "COMPLETED",
         lastSyncTimestamp: new Date().toISOString(),
-        processedKeys: {
-          "rfcs/rfc-001.md": "etag_rfc_1",
-          "specs/spec-001.md": "etag_spec_1",
-        },
         cursor: null,
         metrics: {
           totalDiscovered: 2,
@@ -676,10 +677,6 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         resourceName: "main",
         status: "COMPLETED",
         lastSyncTimestamp: new Date().toISOString(),
-        processedKeys: {
-          "rfcs/rfc-001.md": "etag_rfc_1",
-          "specs/spec-001.md": "etag_spec_1",
-        },
         cursor: null,
         metrics: {
           totalDiscovered: 2,
@@ -700,6 +697,163 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       // Force causes re-discovery of all 2 prefix items
       assert.equal(result.metrics.totalDiscovered, 4); // 2 previous + 2 new
       assert.equal(result.metrics.totalSynced, 4);
+    });
+
+    it("should re-scan all documents after database checkpoint is deleted via resetCursor", async () => {
+      // 1. Confirm that "s3_main" checkpoint currently exists from prior sync runs
+      assert.ok(savedCheckpoints.has("s3_main"));
+
+      // 2. Simulate resetCursor deleting the checkpoint in CheckpointRepository
+      await Effect.runPromise(mockCheckpointRepo.deleteCheckpoint("s3_main"));
+      assert.equal(savedCheckpoints.has("s3_main"), false);
+
+      // 3. Run incremental sync without force: true
+      const stateAfterReset: S3TaskState = {
+        resourceName: "main",
+        status: "IDLE",
+        lastSyncTimestamp: null,
+        cursor: null,
+        metrics: {
+          totalDiscovered: 0,
+          totalSynced: 0,
+          totalFailed: 0,
+          lastDurationMs: 0,
+        },
+        errorMessage: null,
+      };
+
+      const result = await Effect.runPromise(
+        runS3Ingestion("main", stateAfterReset).pipe(
+          Effect.provide(testMockLayers),
+        ),
+      );
+
+      assert.equal(result.status, "COMPLETED");
+      // Since checkpoint was deleted from the database, all files are discovered and synced again
+      assert.equal(result.metrics.totalDiscovered, 2);
+      assert.equal(result.metrics.totalSynced, 2);
+      assert.ok(savedCheckpoints.has("s3_main"));
+    });
+
+    it("should persist and load processedUrls directly from CheckpointRepository during web ingestion", async () => {
+      const mockWebClient = HttpClient.make((req) =>
+        Effect.sync(() => {
+          const isIfNoneMatch =
+            req.headers["if-none-match"] === '"web_etag_1"';
+          if (isIfNoneMatch) {
+            return HttpClientResponse.fromWeb(
+              req,
+              new Response(null, {
+                status: 304,
+                headers: { etag: '"web_etag_1"' },
+              }),
+            );
+          }
+          return HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              "<html><head><title>Web Docs</title></head><body><p>Golem Cloud durable agents and Effect-TS</p></body></html>",
+              {
+                status: 200,
+                headers: { "content-type": "text/html", etag: '"web_etag_1"' },
+              },
+            ),
+          );
+        }),
+      );
+
+      const mockWebConnector = new WebPageConnector(
+        {
+          name: "docs",
+          baseUrl: "https://example.com",
+          seedUrls: ["https://example.com/page1"],
+        },
+        mockWebClient,
+      );
+
+      const testWebLayers = Layer.mergeAll(
+        Layer.succeed(DocumentRepository, mockDocRepo),
+        Layer.succeed(ChunkRepository, mockChunkRepo),
+        Layer.succeed(CheckpointRepository, mockCheckpointRepo),
+        Layer.succeed(EntityRepository, mockEntityRepo),
+        Layer.succeed(GraphRepository, mockGraphRepo),
+        EntityResolverService.Default.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.succeed(EntityRepository, mockEntityRepo),
+              Layer.succeed(GraphRepository, mockGraphRepo),
+            ),
+          ),
+        ),
+        EmbeddingService.Mock,
+        ExtractionService.Default,
+        Layer.succeed(WebConnectorService, {
+          createConnector: (_name: string) => Effect.succeed(mockWebConnector),
+        }),
+      );
+
+      const initialWebState: WebTaskState = {
+        resourceName: "docs",
+        status: "IDLE",
+        lastSyncTimestamp: null,
+        cursor: null,
+        metrics: {
+          totalDiscovered: 0,
+          totalSynced: 0,
+          totalFailed: 0,
+          lastDurationMs: 0,
+        },
+        errorMessage: null,
+      };
+
+      // 1. Initial crawl
+      const firstResult = await Effect.runPromise(
+        runWebIngestion("docs", initialWebState).pipe(
+          Effect.provide(testWebLayers),
+        ),
+      );
+
+      assert.equal(firstResult.status, "COMPLETED");
+      assert.equal(firstResult.metrics.totalDiscovered, 1);
+      assert.equal(firstResult.metrics.totalSynced, 1);
+
+      // Verify checkpoint saved in database with processedUrls
+      assert.ok(savedCheckpoints.has("web_docs"));
+      const cp = savedCheckpoints.get("web_docs")!;
+      const cursorData = cp.cursorData as {
+        processedUrls?: Record<string, { etag?: string }>;
+      };
+      assert.ok(cursorData.processedUrls);
+      assert.equal(
+        cursorData.processedUrls["https://example.com/page1"]?.etag,
+        '"web_etag_1"',
+      );
+
+      // 2. Incremental crawl without changes (HTTP 304)
+      const secondResult = await Effect.runPromise(
+        runWebIngestion("docs", {
+          ...initialWebState,
+          status: "COMPLETED",
+          lastSyncTimestamp: firstResult.lastSyncTimestamp,
+        }).pipe(Effect.provide(testWebLayers)),
+      );
+
+      assert.equal(secondResult.status, "COMPLETED");
+      // Page skipped because CheckpointRepository supplied the cached etag
+      assert.equal(secondResult.metrics.totalSynced, 1);
+
+      // 3. Reset cursor deletes checkpoint in CheckpointRepository
+      await Effect.runPromise(mockCheckpointRepo.deleteCheckpoint("web_docs"));
+      assert.equal(savedCheckpoints.has("web_docs"), false);
+
+      // 4. Subsequent crawl re-crawls and re-indexes page
+      const afterResetResult = await Effect.runPromise(
+        runWebIngestion("docs", initialWebState).pipe(
+          Effect.provide(testWebLayers),
+        ),
+      );
+      assert.equal(afterResetResult.status, "COMPLETED");
+      assert.ok(savedCheckpoints.has("web_docs"));
     });
 
     it("should perform progressive checkpointing every 10 documents during S3 ingestion", async () => {
@@ -739,7 +893,6 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         resourceName: "main",
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedKeys: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -863,7 +1016,6 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         resourceName: "main",
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedKeys: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,

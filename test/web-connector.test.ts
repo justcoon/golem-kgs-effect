@@ -403,14 +403,6 @@ describe("Web Connector & Ingestion Subsystem", () => {
         resourceName: "golem-docs",
         status: "COMPLETED",
         lastSyncTimestamp: "2026-09-09T18:00:00.000Z",
-        processedUrls: [
-          {
-            url: "https://learn.golem.cloud/docs/intro",
-            etag: '"abc-123"',
-            lastModified: "2026-09-01T00:00:00Z",
-            syncedAt: "2026-09-09T18:00:00.000Z",
-          },
-        ],
         cursor: null,
         metrics: {
           totalDiscovered: 15,
@@ -426,7 +418,6 @@ describe("Web Connector & Ingestion Subsystem", () => {
       )(raw);
       assert.equal(decoded.resourceName, "golem-docs");
       assert.equal(decoded.status, "COMPLETED");
-      assert.equal(decoded.processedUrls.length, 1);
       assert.equal(decoded.metrics.totalSynced, 15);
     });
 
@@ -435,7 +426,6 @@ describe("Web Connector & Ingestion Subsystem", () => {
         resourceName: "effect-specs",
         status: "IDLE",
         lastSyncTimestamp: null,
-        processedUrls: {},
         cursor: null,
         metrics: {
           totalDiscovered: 0,
@@ -449,7 +439,6 @@ describe("Web Connector & Ingestion Subsystem", () => {
       const decoded = Schema.decodeUnknownSync(WebTaskStateSchema)(raw);
       assert.equal(decoded.resourceName, "effect-specs");
       assert.equal(decoded.status, "IDLE");
-      assert.deepEqual(decoded.processedUrls, {});
     });
 
     it("should decode WebProcessedUrlEntrySchema and WebTaskMetricsSchema", () => {

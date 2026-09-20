@@ -91,6 +91,32 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
       // On incremental run without changes, totalDiscovered files equal existing processed keys
       assert.ok(statusAfter.metrics !== undefined);
     });
+
+    it("should reset cursor and verify subsequent sync re-ingests documents", async () => {
+      const resetStatus = await client.resetCursor("s3", "main");
+      assert.ok(
+        resetStatus.status === "IDLE" || resetStatus.status === "COMPLETED",
+      );
+      assert.equal(resetStatus.cursor, null);
+
+      // Trigger sync without force: true
+      const summary = await client.triggerIngestionSync("s3", "main", false);
+      assert.equal(summary.resourceName, "main");
+
+      const finalStatus = await client.pollS3SyncCompletion(
+        "main",
+        60000,
+        1500,
+      );
+      assert.ok(
+        finalStatus.status === "COMPLETED" || finalStatus.status === "IDLE",
+      );
+      // Because checkpoint was deleted in postgres via resetCursor, all files are re-ingested
+      assert.ok(
+        finalStatus.metrics.totalSynced > 0,
+        "totalSynced must be > 0 after cursor reset",
+      );
+    });
   });
 
   describe("Suite 3: Event-Driven Webhook Ingestion", () => {
