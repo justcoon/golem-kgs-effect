@@ -119,9 +119,7 @@ export function runS3Ingestion(
               .pipe(Effect.ignore);
           }
         }).pipe(
-          Effect.catch((_err: unknown) =>
-            Ref.update(failedCountRef, (n) => n + 1),
-          ),
+          Effect.catch((_err) => Ref.update(failedCountRef, (n) => n + 1)),
         ),
       ),
     );

@@ -104,14 +104,11 @@ export const WebResourceTargetSchema = Schema.Struct({
 });
 export type WebResourceTarget = typeof WebResourceTargetSchema.Type;
 
-export const ResourcesSecretSchema = Schema.Struct({
-  s3: Schema.Array(S3ResourceTargetSchema),
-  web: Schema.Array(WebResourceTargetSchema),
-});
-export type ResourcesSecretSchema = typeof ResourcesSecretSchema.Type;
-
 export const ResourcesConfigFields = {
-  resources: Schema.Redacted(ResourcesSecretSchema),
+  resources: Schema.Struct({
+    s3: Schema.Redacted(Schema.Array(S3ResourceTargetSchema)),
+    web: Schema.Redacted(Schema.Array(WebResourceTargetSchema)),
+  }),
 };
 
 export const ResourcesConfigSchema = Schema.Struct(ResourcesConfigFields);
@@ -144,6 +141,18 @@ export class ResourcesConfigValues extends Context.Service<
   ResourcesConfigValues,
   ResourcesConfigShape
 >()("app/config/ResourcesConfigValues") {}
+
+export function parseS3Targets(
+  targets: ReadonlyArray<S3ResourceTarget>,
+): Record<string, S3ResourceTarget> {
+  return Object.fromEntries(targets.map((target) => [target.name, target]));
+}
+
+export function parseWebTargets(
+  targets: ReadonlyArray<WebResourceTarget>,
+): Record<string, WebResourceTarget> {
+  return Object.fromEntries(targets.map((target) => [target.name, target]));
+}
 
 export const RelationPatternRuleSchema = Schema.Struct({
   relation: Schema.String,

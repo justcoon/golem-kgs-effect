@@ -149,7 +149,7 @@ export function runWebIngestion(
             }
           }
         }).pipe(
-          Effect.catch((err: unknown) =>
+          Effect.catch((err) =>
             Effect.gen(function* () {
               yield* Ref.update(failedCountRef, (n) => n + 1);
               yield* Effect.logWarning(

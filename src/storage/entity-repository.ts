@@ -35,10 +35,10 @@ const mapDocumentSummaryRow = (row: DocumentSummaryRow): DocumentSummary => ({
 interface EntityRow {
   readonly id: string;
   readonly name: string;
-  readonly entity_type: string;
+  readonly entity_type: EntityType;
   readonly description: string | null;
-  readonly properties: unknown;
-  readonly metadata: unknown;
+  readonly properties: string | Record<string, unknown> | null;
+  readonly metadata: string | Record<string, unknown> | null;
   readonly created_at: Date | string;
   readonly updated_at: Date | string;
 }
@@ -54,7 +54,7 @@ interface AliasRow {
 const mapEntityRow = (row: EntityRow): Entity => ({
   id: row.id,
   name: row.name,
-  entityType: row.entity_type as EntityType,
+  entityType: row.entity_type,
   description: row.description,
   properties: parseJsonOr(row.properties, {}),
   metadata: parseJsonOr(row.metadata, {}),
@@ -83,12 +83,12 @@ EntityRepository.Default = Layer.effect(
 
     const findById = (id: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE id = ${id}
             LIMIT 1
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         const row = rows[0];
         return row ? Option.some(mapEntityRow(row)) : Option.none();
@@ -97,25 +97,25 @@ EntityRepository.Default = Layer.effect(
     const findByIds = (ids: ReadonlyArray<string>) =>
       Effect.gen(function* () {
         if (ids.length === 0) {
-          return [] as ReadonlyArray<Entity>;
+          return [];
         }
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE id = ANY(${Pg.array(ids)})
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         return rows.map(mapEntityRow);
       });
 
     const findByName = (name: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE name = ${name}
             LIMIT 1
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         const row = rows[0];
         return row ? Option.some(mapEntityRow(row)) : Option.none();
@@ -123,14 +123,14 @@ EntityRepository.Default = Layer.effect(
 
     const findByAlias = (alias: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             SELECT e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
             FROM entity_aliases a
             JOIN entities e ON a.entity_id = e.id
             WHERE a.alias = ${alias}
             ORDER BY a.confidence DESC
             LIMIT 1
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         const row = rows[0];
         return row ? Option.some(mapEntityRow(row)) : Option.none();
@@ -142,7 +142,7 @@ EntityRepository.Default = Layer.effect(
         const meta = Pg.jsonb(input.metadata ?? {});
         const desc = input.description ?? null;
 
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             INSERT INTO entities (id, name, entity_type, description, properties, metadata, updated_at)
             VALUES (${input.id}, ${input.name}, ${input.entityType}, ${desc}, ${props}, ${meta}, NOW())
             ON CONFLICT (id) DO UPDATE SET
@@ -153,7 +153,7 @@ EntityRepository.Default = Layer.effect(
               metadata = entities.metadata || EXCLUDED.metadata,
               updated_at = NOW()
             RETURNING id, name, entity_type, description, properties, metadata, created_at, updated_at
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         const row = rows[0];
         if (!row) {
@@ -187,7 +187,7 @@ EntityRepository.Default = Layer.effect(
           ...(input.metadata ?? {}),
         });
 
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             UPDATE entities
             SET name = ${name},
                 entity_type = ${entityType},
@@ -197,7 +197,7 @@ EntityRepository.Default = Layer.effect(
                 updated_at = NOW()
             WHERE id = ${id}
             RETURNING id, name, entity_type, description, properties, metadata, created_at, updated_at
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         const row = rows[0];
         return row ? Option.some(mapEntityRow(row)) : Option.none();
@@ -205,14 +205,14 @@ EntityRepository.Default = Layer.effect(
 
     const addAlias = (alias: EntityAlias) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<AliasRow>`
+        const rows = yield* sql<AliasRow>`
             INSERT INTO entity_aliases (alias, entity_id, source, confidence, created_at)
             VALUES (${alias.alias}, ${alias.entityId}, ${alias.source ?? "extracted"}, ${alias.confidence ?? 1.0}, NOW())
             ON CONFLICT (alias, entity_id) DO UPDATE SET
               source = EXCLUDED.source,
               confidence = EXCLUDED.confidence
             RETURNING alias, entity_id, source, confidence, created_at
-          `) as ReadonlyArray<AliasRow>;
+          `;
 
         const row = rows[0];
         if (!row) {
@@ -223,40 +223,40 @@ EntityRepository.Default = Layer.effect(
 
     const listAliases = (entityId: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<AliasRow>`
+        const rows = yield* sql<AliasRow>`
             SELECT alias, entity_id, source, confidence, created_at
             FROM entity_aliases
             WHERE entity_id = ${entityId}
             ORDER BY confidence DESC
-          `) as ReadonlyArray<AliasRow>;
+          `;
 
         return rows.map(mapAliasRow);
       });
 
     const searchByName = (query: string, limit = 20) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             SELECT id, name, entity_type, description, properties, metadata, created_at, updated_at
             FROM entities
             WHERE name ILIKE ${`%${query}%`}
                OR to_tsvector('english', name || ' ' || COALESCE(description, '')) @@ plainto_tsquery('english', ${query})
             ORDER BY similarity(name, ${query}) DESC
             LIMIT ${limit}
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         return rows.map(mapEntityRow);
       });
 
     const getTopConnected = (limit = 10) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<EntityRow>`
+        const rows = yield* sql<EntityRow>`
             SELECT e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
             FROM entities e
             LEFT JOIN edges ed ON (e.id = ed.source_id OR e.id = ed.target_id)
             GROUP BY e.id, e.name, e.entity_type, e.description, e.properties, e.metadata, e.created_at, e.updated_at
             ORDER BY COUNT(ed.source_id) DESC, e.updated_at DESC
             LIMIT ${limit}
-          `) as ReadonlyArray<EntityRow>;
+          `;
 
         return rows.map(mapEntityRow);
       });
@@ -280,7 +280,7 @@ EntityRepository.Default = Layer.effect(
 
     const getRelatedDocuments = (entityId: string, limit = 50) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<DocumentSummaryRow>`
+        const rows = yield* sql<DocumentSummaryRow>`
             WITH doc_refs AS (
                 SELECT c.document_id AS ref
                 FROM entity_chunks ec
@@ -322,7 +322,7 @@ EntityRepository.Default = Layer.effect(
                OR d.source_key IN (SELECT ref FROM doc_refs)
             ORDER BY d.updated_at DESC
             LIMIT ${limit}
-          `) as ReadonlyArray<DocumentSummaryRow>;
+          `;
 
         return rows.map(mapDocumentSummaryRow);
       });

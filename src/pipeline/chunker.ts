@@ -236,7 +236,7 @@ export class DocumentChunker {
         source: document.source,
         resourceName: document.resourceName,
         sourceKey: document.sourceKey,
-        ...(document.metadata as Record<string, unknown>),
+        ...document.metadata,
       }),
     );
   }

@@ -7,7 +7,7 @@ interface DocumentRow {
   readonly id: string;
   readonly title: string;
   readonly content: string;
-  readonly metadata: unknown;
+  readonly metadata: string | Record<string, unknown> | null;
   readonly tags: string[];
   readonly source: string;
   readonly resource_name: string;

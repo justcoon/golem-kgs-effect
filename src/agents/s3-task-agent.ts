@@ -4,7 +4,6 @@ import {
   calculateScheduledAt,
   S3TaskStateSchema,
   S3TaskStatusResponseSchema,
-  WebhookIngestPayloadSchema,
   type S3TaskState,
   type S3TaskStatusResponse,
 } from "./types.js";
@@ -82,14 +81,6 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
       description:
         "Called by Golem host timer to execute scheduled sync and schedule next cycle",
     }),
-    ingestWebhook: method({
-      params: {
-        payload: WebhookIngestPayloadSchema,
-      },
-      success: S3TaskStatusResponseSchema,
-      description: "Push webhook ingress for external change events",
-      http: [Http.post("/webhook")],
-    }),
   },
 });
 
@@ -97,7 +88,7 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
   ({ resourceName }, snapshot) =>
     Effect.gen(function* () {
       const config = yield* AppAgentConfig;
-      const pipelineLayer = yield* makeS3TaskAgentLayer(config);
+      const pipelineLayer = yield* makeS3TaskAgentLayer(config, resourceName);
 
       const state = yield* snapshot.init({
         resourceName,
@@ -224,14 +215,6 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
             }
             return true;
           }).pipe(Effect.orDie),
-
-        ingestWebhook: ({ payload }) =>
-          Effect.gen(function* () {
-            yield* Effect.logInfo(
-              `Push webhook received for s3:${resourceName} (action=${payload.action ?? "default"})`,
-            );
-            return yield* doSync(payload.force);
-          }),
       };
     }),
 );

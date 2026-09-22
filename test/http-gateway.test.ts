@@ -14,8 +14,6 @@ import {
   PathFindingResultSchema,
   S3TaskStatusResponseSchema,
   SearchResponseSchema,
-  WebhookIngestPayloadSchema,
-  type WebhookIngestPayload,
 } from "../src/agents/types.js";
 
 describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
@@ -83,39 +81,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
         mcpSection.includes("KnowledgeAccessAgent:"),
         "KnowledgeAccessAgent must be configured under mcp deployments",
       );
-    });
-  });
-
-  describe("Webhook Schemas & Contracts", () => {
-    describe("WebhookIngestPayloadSchema", () => {
-      it("should decode a full push webhook payload", () => {
-        const raw = {
-          action: "s3:ObjectCreated:Put",
-          force: true,
-        };
-
-        const decoded: WebhookIngestPayload = Schema.decodeUnknownSync(
-          WebhookIngestPayloadSchema,
-        )(raw);
-        assert.equal(decoded.action, "s3:ObjectCreated:Put");
-        assert.equal(decoded.force, true);
-      });
-
-      it("should decode an empty or partial push webhook payload with defaults", () => {
-        const raw = {};
-        const decoded = Schema.decodeUnknownSync(WebhookIngestPayloadSchema)(
-          raw,
-        );
-        assert.equal(decoded.action, undefined);
-        assert.equal(decoded.force, undefined);
-      });
-
-      it("should reject payload with invalid types", () => {
-        const raw = { force: "not-a-boolean" };
-        assert.throws(() => {
-          Schema.decodeUnknownSync(WebhookIngestPayloadSchema)(raw);
-        });
-      });
     });
   });
 
@@ -190,25 +155,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       const pattern = "/api/knowledge/entities/top";
       const params = matchRoute(pattern, "/api/knowledge/entities/top");
       assert.ok(params !== null);
-    });
-
-    it("should match S3IngestorTaskAgent webhook ingress: /api/ingestion/s3/{resourceName}/webhook", () => {
-      const pattern = "/api/ingestion/s3/{resourceName}/webhook";
-      const params = matchRoute(pattern, "/api/ingestion/s3/main-docs/webhook");
-
-      assert.ok(params !== null);
-      assert.equal(params?.resourceName, "main-docs");
-    });
-
-    it("should match WebIngestorTaskAgent webhook ingress: /api/ingestion/web/{resourceName}/webhook", () => {
-      const pattern = "/api/ingestion/web/{resourceName}/webhook";
-      const params = matchRoute(
-        pattern,
-        "/api/ingestion/web/golem-docs/webhook",
-      );
-
-      assert.ok(params !== null);
-      assert.equal(params?.resourceName, "golem-docs");
     });
 
     it("should match S3IngestorTaskAgent sync route: /api/ingestion/s3/{resourceName}/sync", () => {
@@ -533,19 +479,6 @@ describe("Phase 6: Golem Native HTTP Gateway & Agent Mounts", () => {
       assert.equal(decoded.entities.length, 1);
       assert.equal(decoded.entities[0].name, "Entity A");
       assert.equal(decoded.shortestPathLength, 1);
-    });
-
-    it("should validate WebhookIngestPayloadSchema for POST /api/ingestion/s3/{resourceName}/webhook", () => {
-      const webhookRaw = {
-        action: "s3:ObjectCreated:Put",
-        force: true,
-      };
-
-      const decoded: WebhookIngestPayload = Schema.decodeUnknownSync(
-        WebhookIngestPayloadSchema,
-      )(webhookRaw);
-      assert.equal(decoded.action, "s3:ObjectCreated:Put");
-      assert.equal(decoded.force, true);
     });
   });
 });

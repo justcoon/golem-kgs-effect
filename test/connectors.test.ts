@@ -19,8 +19,8 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
   describe("Dynamic Multi-Resource Configuration", () => {
     it("should decode dynamic multi-resource S3 configuration under resources.s3", () => {
       const raw = {
-        resources: Redacted.make({
-          s3: [
+        resources: {
+          s3: Redacted.make([
             {
               name: "main",
               endpoint: "http://localhost:9000",
@@ -45,28 +45,29 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
               accessKeyId: "rustfsadmin",
               secretAccessKey: "rustfsadmin123",
             },
-          ],
-          web: [],
-        }),
+          ]),
+          web: Redacted.make([]),
+        },
       };
 
       const parsed = Schema.decodeUnknownSync(ResourcesConfigSchema)(raw);
-      assert.ok(Redacted.isRedacted(parsed.resources));
+      assert.ok(Redacted.isRedacted(parsed.resources.s3));
+      assert.ok(Redacted.isRedacted(parsed.resources.web));
 
-      const inner = Redacted.value(parsed.resources);
-      const resourceNames = inner.s3.map((r) => r.name);
+      const s3List = Redacted.value(parsed.resources.s3);
+      const resourceNames = s3List.map((r) => r.name);
 
       assert.deepEqual(resourceNames, ["main", "legal", "technical"]);
       assert.equal(
-        inner.s3.find((r) => r.name === "main")?.bucket,
+        s3List.find((r) => r.name === "main")?.bucket,
         "golem-documents",
       );
       assert.equal(
-        inner.s3.find((r) => r.name === "legal")?.bucket,
+        s3List.find((r) => r.name === "legal")?.bucket,
         "legal-docs",
       );
       assert.equal(
-        inner.s3.find((r) => r.name === "technical")?.bucket,
+        s3List.find((r) => r.name === "technical")?.bucket,
         "technical-docs",
       );
     });

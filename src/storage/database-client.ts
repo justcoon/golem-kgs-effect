@@ -9,11 +9,14 @@ const tryParseJson = Option.liftThrowable(JSON.parse);
 /**
  * Safely decodes a JSON string or returns fallback if invalid or already parsed.
  */
-export const parseJsonOr = <T>(value: unknown, fallback: T): T => {
+export const parseJsonOr = <T>(
+  value: string | T | null | undefined,
+  fallback: T,
+): T => {
   if (typeof value === "string") {
     return tryParseJson(value).pipe(Option.getOrElse(() => fallback)) as T;
   }
-  return (value as T) ?? fallback;
+  return value ?? fallback;
 };
 
 export type AppAgentConfigService = typeof AppAgentConfig.Service;

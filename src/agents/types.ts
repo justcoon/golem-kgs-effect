@@ -338,14 +338,6 @@ export const KnowledgeBaseOverviewSchema = Schema.Struct({
 });
 export type KnowledgeBaseOverview = typeof KnowledgeBaseOverviewSchema.Type;
 
-// --- Webhook & Callback Schemas ---
-
-export const WebhookIngestPayloadSchema = Schema.Struct({
-  action: Schema.optional(Schema.String),
-  force: Schema.optional(Schema.Boolean),
-});
-export type WebhookIngestPayload = typeof WebhookIngestPayloadSchema.Type;
-
 // --- Helper Utilities ---
 
 /**

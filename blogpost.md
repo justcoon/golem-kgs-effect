@@ -1,8 +1,8 @@
 # Building a Serverless, Durable Knowledge Graph & GraphRAG Platform with Golem Cloud and Effect
 
-Modern AI applications increasingly rely on **Retrieval-Augmented Generation (RAG)** to ground Large Language Models (LLMs) in proprietary facts. However, conventional vector-only RAG has critical blind spots: it struggles with **multi-hop relational reasoning**, fails to capture **hierarchical structures**, and lacks the explicit connectivity needed to answer questions like *"Which components depend on service X through transitive dependencies?"* or *"What are all the entities related to topic Y across disparate documents?"*
+Modern AI applications increasingly rely on **Retrieval-Augmented Generation (RAG)** to ground Large Language Models (LLMs) in proprietary facts. However, conventional vector-only RAG has critical blind spots: it struggles with **multi-hop relational reasoning**, fails to capture **hierarchical structures**, and lacks the explicit connectivity needed to answer questions like _"Which components depend on service X through transitive dependencies?"_ or _"What are all the entities related to topic Y across disparate documents?"_
 
-To solve this, **GraphRAG** unites the semantic similarity of dense vector embeddings with the structural precision of a typed knowledge graph. 
+To solve this, **GraphRAG** unites the semantic similarity of dense vector embeddings with the structural precision of a typed knowledge graph.
 
 Yet, building an enterprise-grade GraphRAG system traditionally demands complex infrastructure: background worker pools, cron schedulers (Airflow, Celery), distributed queue managers (RabbitMQ, Redis), state orchestrators (Temporal), API gateways, and specialized vector/graph databases.
 
@@ -13,6 +13,7 @@ In this post, we explore how we built **[golem-kgs-effect](https://github.com/ju
 ## 1. System Architecture: The Dual-Representation Engine
 
 At the core of the service is a **dual-representation paradigm**: every ingested document is decomposed simultaneously into:
+
 1. **Dense Vector Embeddings** (768-dimensional `nomic-embed-text`) stored in PostgreSQL with `pgvector` HNSW indexing for semantic similarity search.
 2. **Typed Knowledge Graph Elements** (canonical entities, aliases, properties, and directed relationships with Bayesian confidence scores) stored in relational graph tables for multi-hop topological traversal.
 
@@ -62,7 +63,7 @@ flowchart TD
 ### Core Architecture Components
 
 - **Golem Cloud WebAssembly Host**: Runs QuickJS-compiled WebAssembly components providing **durable execution**. If a worker crashes or pauses mid-computation, Golem automatically replays its operation log and resumes execution seamlessly without data loss or duplicate external side effects.
-- **PostgreSQL + pgvector**: A unified persistence layer configured via [`@golemcloud/effect-golem/postgres`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/storage/postgres-client.ts). It enforces foreign-key relational integrity, maintains HNSW vector indices, powers full-text GIN search, and tracks durable sync checkpoints.
+- **PostgreSQL + pgvector**: A unified persistence layer configured via [`@golemcloud/effect-golem/postgres`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/storage/database-client.ts). It enforces foreign-key relational integrity, maintains HNSW vector indices, powers full-text GIN search, and tracks durable sync checkpoints.
 - **Dual Ingress Connectors**:
   - **S3 / RustFS Connector**: Scans S3 buckets using AWS SigV4 authorization, tracking ETags and timestamp checkpoints to execute incremental synchronization.
   - **Web / Sitemap Connector**: Recursively crawls documentation sites via `sitemap.xml` or seed URLs, stripping HTML boilerplate and transforming web pages into semantic Markdown via `node-html-markdown` while streaming with $O(1)$ memory consumption.
@@ -113,13 +114,13 @@ flowchart TD
 ### Deep Dive into the 5 Pipeline Stages
 
 1. **Ingress & Deterministic Identity**:
-   Every incoming document is assigned an **RFC 4122 UUID v5** deterministically generated from `(source, resourceName, sourceKey)`. Before chunking or embedding, the raw document is stored in the [`documents`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/storage/schema.ts) table. This guarantees idempotent re-ingestion, multi-tenant isolation (`uq_documents_source_resource_key`), and satisfies foreign-key constraints for downstream chunks.
+   Every incoming document is assigned an **RFC 4122 UUID v5** deterministically generated from `(source, resourceName, sourceKey)`. Before chunking or embedding, the raw document is stored in the [`documents`](https://github.com/justcoon/golem-kgs-effect/blob/main/migrations/001_initial_schema.sql) table. This guarantees idempotent re-ingestion, multi-tenant isolation (`uq_documents_source_resource_key`), and satisfies foreign-key constraints for downstream chunks.
 2. **Semantic Hierarchical Chunking**:
    The [`DocumentChunker`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/chunker.ts) splits Markdown documents while tracking the section hierarchy. Each chunk preserves breadcrumbs (e.g., `Architecture > Ingestion > Pipeline Flow`), token count bounds, and overlap. This context is embedded directly into the chunk text, ensuring embeddings retain contextual meaning even when detached from the parent document.
 3. **Parallel Vector & Extraction Pipeline**:
    The chunk stream branches into two concurrent tasks:
    - **Vector Embeddings**: Normalized 768-dimensional dense vectors generated via [`EmbeddingService`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/embedding-service.ts).
-   - **Entity & Relation Extraction**: The [`EntityExtractor`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/entity-extractor.ts) applies linguistic rules, regex patterns, a curated technology dictionary, and stopword filters to identify candidate domain concepts (e.g., `Golem Cloud`, `PostgreSQL`, `pgvector`) and relations (e.g., `DEPENDS_ON`, `PART_OF`, `RELATES_TO`).
+   - **Entity & Relation Extraction**: The [`EntityExtractor`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/extractor.ts) applies linguistic rules, regex patterns, a curated technology dictionary, and stopword filters to identify candidate domain concepts (e.g., `Golem Cloud`, `PostgreSQL`, `pgvector`) and relations (e.g., `DEPENDS_ON`, `PART_OF`, `RELATES_TO`).
 4. **Entity Resolution & Bayesian Fusion**:
    Extracted terms often contain aliases (e.g., `postgres` vs. `PostgreSQL`). The [`EntityResolver`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/entity-resolver.ts) resolves synonyms to a canonical slug (`postgresql`), merges properties, and uses Bayesian confidence updating:
    $$\text{Confidence}_{\text{new}} = 1 - (1 - \text{Confidence}_{\text{old}}) \times (1 - \text{Confidence}_{\text{match}})$$
@@ -136,33 +137,43 @@ flowchart TD
 
 A key strength of the architecture is that **new data sources (S3 buckets, prefixes, or documentation sites) are added purely through configuration and secrets—zero code changes or redeployments required**.
 
-Backed by [Golem Cloud's native Config & Secrets management](https://learn.golem.cloud/v1.5/develop/config-and-secrets), targets are defined in [`src/config/schema.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/config/schema.ts) and protected with Effect's `Schema.Redacted`:
+Backed by [Golem Cloud's native Config & Secrets management](https://learn.golem.cloud/v1.5/develop/config-and-secrets), targets are defined in [`src/config/schema.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/config/schema.ts) and protected with Effect's `Schema.Redacted`. S3 and Web resource credentials are partitioned into dedicated secret schemas, allowing granular rotation and least-privilege scoping:
 
 ```typescript
 export const ResourcesConfigFields = {
-  // S3 & Web targets (endpoints, credentials, sitemaps, headers) encrypted at rest
-  resources: Schema.Redacted(ResourcesSecretSchema),
+  resources: Schema.Struct({
+    s3: Schema.Redacted(Schema.Array(S3ResourceTargetSchema)),
+    web: Schema.Redacted(Schema.Array(WebResourceTargetSchema)),
+  }),
 };
 ```
 
 To add a new target (e.g. a `legal` bucket or `effect-docs` crawler), simply define it in [`golem.yaml`](https://github.com/justcoon/golem-kgs-effect/blob/main/golem.yaml):
 
 ```yaml
-secretDefaults:
-  local:
-    resources:
-      s3:
-        - name: "legal" # <-- Onboard a new S3 bucket
-          endpoint: "{{ S3_ENDPOINT_URL }}"
-          bucket: "corporate-legal-vault"
-          prefixes: ["agreements/"]
-          accessKeyId: "{{ LEGAL_S3_KEY }}"
-          secretAccessKey: "{{ LEGAL_S3_SECRET }}"
-      web:
-        - name: "effect-docs" # <-- Onboard a new web documentation site
-          baseUrl: "https://effect.website"
-          seedUrls: ["https://effect.website/docs"]
+agentSecretDefaults:
+  - path: [resources, s3]
+    secretValue:
+      - name: "legal" # <-- Onboard a new S3 bucket
+        endpoint: "{{ S3_ENDPOINT_URL }}"
+        bucket: "corporate-legal-vault"
+        prefixes: ["agreements/"]
+        accessKeyId: "{{ LEGAL_S3_KEY }}"
+        secretAccessKey: "{{ LEGAL_S3_SECRET }}"
+  - path: [resources, web]
+    secretValue:
+      - name: "effect-docs" # <-- Onboard a new web documentation site
+        baseUrl: "https://effect.website"
+        seedUrls: ["https://effect.website/docs"]
 ```
+
+### Least-Privilege Scoped Connector Layers
+
+In standard microservice architectures, workers often load global credential bundles with access to all buckets and resources. In **golem-kgs-effect**, layer creation is strictly scoped per target resource via [`src/agents/connector-layers.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/connector-layers.ts):
+
+- **Strict Validation & Fail-Fast**: When `makeS3ConnectorLayer(config, resourceName)` or `makeWebConnectorLayer(config, resourceName)` is invoked, it validates that `resourceName` exists in secrets, immediately raising a typed `ConnectorError` during initialization if absent.
+- **Credential Isolation**: The resulting `S3ResourcesConfig` or `WebResourcesConfig` service provided to the worker fiber contains **only** the configuration for that specific resource. A worker ingesting the `legal` bucket has zero access to the `financial` or `engineering` credentials in the secret store.
+- **Decoupled Architecture**: Pure connector layer factories are completely isolated from database drivers and native host bindings, allowing unit and integration tests to execute cleanly without external runtime dependencies.
 
 ### On-Demand Workers & Failure Isolation
 
@@ -205,7 +216,8 @@ The [`S3IngestorTaskAgent`](https://github.com/justcoon/golem-kgs-effect/blob/ma
 ```typescript
 export const S3IngestorTaskAgentDefinition = defineAgent({
   name: "S3IngestorTaskAgent",
-  description: "Durable S3 ingestion task worker bound 1:1 to an S3 resource target",
+  description:
+    "Durable S3 ingestion task worker bound 1:1 to an S3 resource target",
   mode: "durable",
   config: AppAgentConfig,
   constructorParams: {
@@ -220,7 +232,8 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
     sync: method({
       params: { force: Schema.optional(Schema.Boolean) },
       success: S3TaskStatusResponseSchema,
-      description: "Executes full or incremental synchronization of the bound S3 resource",
+      description:
+        "Executes full or incremental synchronization of the bound S3 resource",
       http: [Http.post("/sync")],
     }),
     getStatus: method({
@@ -232,7 +245,8 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
     resetCursor: method({
       params: {},
       success: S3TaskStatusResponseSchema,
-      description: "Resets the sync cursor to force a full rescan on the next sync",
+      description:
+        "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
     }),
     startSchedule: method({
@@ -250,20 +264,17 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
     scheduledTick: method({
       params: {},
       success: Schema.Boolean,
-      description: "Called by Golem host timer to execute scheduled sync and schedule next cycle",
-    }),
-    ingestWebhook: method({
-      params: { payload: WebhookIngestPayloadSchema },
-      success: S3TaskStatusResponseSchema,
-      description: "Push webhook ingress for external change events",
-      http: [Http.post("/webhook")],
+      description:
+        "Called by Golem host timer to execute scheduled sync and schedule next cycle",
     }),
   },
 });
 ```
 
 #### Self-Scheduling via Golem Host Timers
+
 Instead of requiring an external cron service, the agent self-schedules its next execution using Golem's native timer runtime:
+
 ```typescript
 const scheduleNextTick = (agent: S3TaskAgentHandle, intervalSeconds: number) =>
   Effect.gen(function* () {
@@ -271,6 +282,7 @@ const scheduleNextTick = (agent: S3TaskAgentHandle, intervalSeconds: number) =>
     yield* agent.schedule(fireAt).scheduledTick();
   });
 ```
+
 If the host server reboots or migrates, Golem preserves the durable timer and executes the invocation when due.
 
 ---
@@ -284,7 +296,8 @@ The [`WebIngestorTaskAgent`](https://github.com/justcoon/golem-kgs-effect/blob/m
 ```typescript
 export const WebIngestorTaskAgentDefinition = defineAgent({
   name: "WebIngestorTaskAgent",
-  description: "Durable Web Page / Documentation ingestion task worker bound 1:1 to a web resource target",
+  description:
+    "Durable Web Page / Documentation ingestion task worker bound 1:1 to a web resource target",
   mode: "durable",
   config: AppAgentConfig,
   constructorParams: {
@@ -299,7 +312,8 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
     sync: method({
       params: { force: Schema.optional(Schema.Boolean) },
       success: WebTaskStatusResponseSchema,
-      description: "Executes full or incremental synchronization of the bound Web resource",
+      description:
+        "Executes full or incremental synchronization of the bound Web resource",
       http: [Http.post("/sync")],
     }),
     getStatus: method({
@@ -311,7 +325,8 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
     resetCursor: method({
       params: {},
       success: WebTaskStatusResponseSchema,
-      description: "Resets the sync cursor to force a full rescan on the next sync",
+      description:
+        "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
     }),
     startSchedule: method({
@@ -329,13 +344,8 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
     scheduledTick: method({
       params: {},
       success: Schema.Boolean,
-      description: "Called by Golem host timer to execute scheduled sync and schedule next cycle",
-    }),
-    ingestWebhook: method({
-      params: { payload: WebhookIngestPayloadSchema },
-      success: WebTaskStatusResponseSchema,
-      description: "Push webhook ingress for external change events",
-      http: [Http.post("/webhook")],
+      description:
+        "Called by Golem host timer to execute scheduled sync and schedule next cycle",
     }),
   },
 });
@@ -352,8 +362,10 @@ Configured with `mode: "ephemeral"`, the [`KnowledgeAccessAgent`](https://github
 ```typescript
 export const KnowledgeAccessAgent = defineAgent({
   name: "KnowledgeAccessAgent",
-  description: "Stateless ephemeral gateway for high-throughput concurrent search, graph traversal, GraphRAG, and question-answering",
-  promptHint: "Query and explore the knowledge graph, retrieve documents, execute GraphRAG, and answer questions",
+  description:
+    "Stateless ephemeral gateway for high-throughput concurrent search, graph traversal, GraphRAG, and question-answering",
+  promptHint:
+    "Query and explore the knowledge graph, retrieve documents, execute GraphRAG, and answer questions",
   mode: "ephemeral",
   config: AppAgentConfig,
   constructorParams: {},
@@ -364,7 +376,9 @@ export const KnowledgeAccessAgent = defineAgent({
       params: {
         query: Schema.String,
         limit: Schema.optional(Schema.Number),
-        searchType: Schema.optional(Schema.Literals(["hybrid", "vector", "keyword"])),
+        searchType: Schema.optional(
+          Schema.Literals(["hybrid", "vector", "keyword"]),
+        ),
       },
       success: SearchResponseSchema,
       http: [Http.post("/search")],
@@ -372,7 +386,10 @@ export const KnowledgeAccessAgent = defineAgent({
 
     // 2. Entity Discovery & Graph Hubs
     searchEntities: method({
-      params: { query: Schema.optional(Schema.String), limit: Schema.optional(Schema.Number) },
+      params: {
+        query: Schema.optional(Schema.String),
+        limit: Schema.optional(Schema.Number),
+      },
       success: EntitySearchResponseSchema,
       http: [Http.post("/entities/search")],
     }),
@@ -401,7 +418,9 @@ export const KnowledgeAccessAgent = defineAgent({
         targetEntityId: Schema.String,
         maxDepth: Schema.optional(Schema.Number),
         relationTypes: Schema.optional(Schema.Array(Schema.String)),
-        direction: Schema.optional(Schema.Literals(["OUTBOUND", "INBOUND", "BOTH"])),
+        direction: Schema.optional(
+          Schema.Literals(["OUTBOUND", "INBOUND", "BOTH"]),
+        ),
       },
       success: PathFindingResultSchema,
       http: [Http.post("/paths")],
@@ -471,6 +490,7 @@ export const KnowledgeAccessAgent = defineAgent({
 Rather than building a separate MCP adapter, `KnowledgeAccessAgent` is exposed directly as an **MCP Server** via Golem's Streamable HTTP transport:
 
 In [`golem.yaml`](https://github.com/justcoon/golem-kgs-effect/blob/main/golem.yaml):
+
 ```yaml
 mcp:
   deployments:
@@ -508,15 +528,21 @@ To make the knowledge graph and GraphRAG capabilities accessible, we built an in
 ## 7. What Makes This Stack Unique?
 
 ### 1. Zero Infrastructure Baggage
+
 In a standard architecture, achieving self-scheduling, fault-tolerant background ETL and high-throughput query handling requires maintaining Celery/Temporal workers, Redis message brokers, Cron jobs, and external API gateways. With **Golem Cloud**, each agent is a self-contained, durable WebAssembly actor with built-in timers, durable execution, and native HTTP/MCP routing.
 
-### 2. Bulletproof Reliability with Effect-TS
+### 2. Bulletproof Reliability with Effect-TS & Strict Typing
+
 Writing distributed ETL pipelines in TypeScript is often plagued by silent errors, untracked async promises, and unhandled runtime exceptions. By leveraging **Effect**:
-- Every error is typed and tracked in the function signature (no unexpected crashes).
-- Resources (database connection pools, HTTP connections) are managed via `Scope` and `Layer`.
-- Retries, timeouts, and fallbacks are declarative and composable.
+
+- **Fully Typed Error Handling**: Every failure mode (`ConnectorError`, `EmbeddingError`, `LlmSynthesisError`, `SqlError`) is tracked in function return types rather than thrown as untyped exceptions.
+- **Zero Anti-Patterns & Strict Typing**: The entire codebase avoids unsafe `as unknown as Type` casts, loose `unknown` parameters, and redundant runtime assertions. Domain models (`VectorEmbedding`, `Entity`, `RawDocument`), storage rows (`CheckpointRow`, `EntityRow`), and generic `@effect/sql` queries are statically typed end-to-end.
+- **Safe JSON Decoding**: Database JSON columns and metadata fields are typed with `string | Record<string, unknown> | null`, paired with type-safe `parseJsonOr` decoders that eliminate manual type assertions.
+- **Resource Management**: Database connection pools and HTTP clients are safely scoped and composed with Effect `Layer` and `Scope`.
+- **Declarative Concurrency**: Retries, timeouts, and structured parallelism are declarative, interruptible, and composable.
 
 ### 3. Explainable, Grounded AI
+
 Pure vector search is a black box that often returns fragmented chunks lacking structural context. By merging vector embeddings with an explicit knowledge graph, **golem-kgs-effect** gives users and AI agents the best of both worlds: semantic discovery and verifiable, structured relational grounding.
 
 ---

@@ -56,10 +56,8 @@ export class EntityResolverService extends Context.Service<
             const candConf = Number(candidate.metadata?.confidence ?? 0.8);
             const newConf = fuseConfidence(oldConf, candConf);
 
-            const existingProps =
-              (existing.properties as Record<string, unknown>) ?? {};
-            const candidateProps =
-              (candidate.properties as Record<string, unknown>) ?? {};
+            const existingProps = existing.properties ?? {};
+            const candidateProps = candidate.properties ?? {};
             const existingDocs = Array.isArray(existingProps.documents)
               ? (existingProps.documents as string[])
               : typeof existingProps.extractedFromDocument === "string"
@@ -97,10 +95,8 @@ export class EntityResolverService extends Context.Service<
             const candConf = Number(candidate.metadata?.confidence ?? 0.8);
             const newConf = fuseConfidence(oldConf, candConf);
 
-            const existingProps =
-              (existing.properties as Record<string, unknown>) ?? {};
-            const candidateProps =
-              (candidate.properties as Record<string, unknown>) ?? {};
+            const existingProps = existing.properties ?? {};
+            const candidateProps = candidate.properties ?? {};
             const existingDocs = Array.isArray(existingProps.documents)
               ? (existingProps.documents as string[])
               : typeof existingProps.extractedFromDocument === "string"
@@ -215,13 +211,10 @@ export class EntityResolverService extends Context.Service<
                 weight: newWeight,
                 confidence: newConf,
                 properties: {
-                  ...((existing.properties as Record<string, unknown>) ?? {}),
-                  ...((edgeInput.properties as Record<string, unknown>) ?? {}),
+                  ...(existing.properties ?? {}),
+                  ...(edgeInput.properties ?? {}),
                   observationCount:
-                    (Number(
-                      (existing.properties as Record<string, unknown>)
-                        ?.observationCount,
-                    ) || 1) + 1,
+                    (Number(existing.properties?.observationCount) || 1) + 1,
                 },
               });
               resolvedEdges.push(merged);
