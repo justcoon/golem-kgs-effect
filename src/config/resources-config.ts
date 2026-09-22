@@ -1,6 +1,8 @@
 import { Effect, Layer, Option, Redacted } from "effect";
 import { defineConfig } from "@golemcloud/effect-golem";
 import {
+  parseS3Targets,
+  parseWebTargets,
   ResourcesConfigFields,
   ResourcesConfigValues,
   S3ResourcesConfig,
@@ -9,29 +11,7 @@ import {
   type WebResourceTarget,
 } from "./schema.js";
 
-function parseS3Targets(val: unknown): Record<string, S3ResourceTarget> {
-  const s3Raw = (val as { s3?: unknown })?.s3 ?? val;
-  const s3Entries: [string, S3ResourceTarget][] = Array.isArray(s3Raw)
-    ? s3Raw.map((target: S3ResourceTarget) => [target.name, target])
-    : s3Raw instanceof Map
-      ? Array.from(s3Raw.entries())
-      : typeof s3Raw === "object" && s3Raw !== null
-        ? Object.entries(s3Raw as Record<string, S3ResourceTarget>)
-        : [];
-  return Object.fromEntries(s3Entries);
-}
-
-function parseWebTargets(val: unknown): Record<string, WebResourceTarget> {
-  const webRaw = (val as { web?: unknown })?.web ?? val;
-  const webEntries: [string, WebResourceTarget][] = Array.isArray(webRaw)
-    ? webRaw.map((target: WebResourceTarget) => [target.name, target])
-    : webRaw instanceof Map
-      ? Array.from(webRaw.entries())
-      : typeof webRaw === "object" && webRaw !== null
-        ? Object.entries(webRaw as Record<string, WebResourceTarget>)
-        : [];
-  return Object.fromEntries(webEntries);
-}
+export { parseS3Targets, parseWebTargets };
 
 export class ResourcesConfig extends defineConfig(
   "Resources.Config",

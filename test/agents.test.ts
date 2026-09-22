@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Redacted, Schema } from "effect";
 import {
   calculateScheduledAt,
   DocumentResultSchema,
@@ -23,6 +23,11 @@ import {
   WebPageConnector,
 } from "../src/connectors/web-connector.js";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import {
+  makeS3ConnectorLayer,
+  makeWebConnectorLayer,
+} from "../src/agents/connector-layers.js";
+import type { AppAgentConfigService } from "../src/config/agent-config.js";
 import {
   DocumentRepository,
   type DocumentRepositoryShape,
@@ -1139,6 +1144,111 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       );
 
       assert.equal(result.status, "COMPLETED");
+    });
+  });
+
+  describe("Scoped Resource Connector Layer Isolation & Validation", () => {
+    const mockConfig = {
+      resources: {
+        s3: {
+          get: Effect.succeed(
+            Redacted.make([
+              {
+                name: "main",
+                endpoint: "http://localhost:9000",
+                region: "us-east-1",
+                bucket: "golem-documents",
+                accessKeyId: "key1",
+                secretAccessKey: "secret1",
+              },
+              {
+                name: "legal",
+                endpoint: "http://localhost:9000",
+                region: "us-east-1",
+                bucket: "legal-docs",
+                accessKeyId: "key2",
+                secretAccessKey: "secret2",
+              },
+            ]),
+          ),
+        },
+        web: {
+          get: Effect.succeed(
+            Redacted.make([
+              {
+                name: "golem-docs",
+                baseUrl: "https://learn.golem.cloud",
+                seedUrls: ["https://learn.golem.cloud"],
+              },
+            ]),
+          ),
+        },
+      },
+    } as unknown as AppAgentConfigService;
+
+    it("makeS3ConnectorLayer should succeed and isolate only the specified resource target", async () => {
+      const s3Layer = await Effect.runPromise(
+        makeS3ConnectorLayer(mockConfig, "main"),
+      );
+
+      const checkProgram = Effect.gen(function* () {
+        const s3Service = yield* S3ConnectorService;
+        const mainConn = yield* s3Service.createConnector("main");
+        assert.equal(mainConn.source, "s3");
+        assert.equal(mainConn.id, "s3_golem-documents_us-east-1");
+
+        // "legal" was configured in global secrets, but must be inaccessible in the "main" layer
+        const legalExit = yield* Effect.exit(
+          s3Service.createConnector("legal"),
+        );
+        assert.ok(legalExit._tag === "Failure");
+      });
+
+      await Effect.runPromise(checkProgram.pipe(Effect.provide(s3Layer)));
+    });
+
+    it("makeS3ConnectorLayer should fail fast when target resource is not found in secrets", async () => {
+      const exit = await Effect.runPromiseExit(
+        makeS3ConnectorLayer(mockConfig, "non-existent"),
+      );
+
+      assert.ok(exit._tag === "Failure");
+      assert.match(
+        String(exit.cause),
+        /S3 resource target 'non-existent' is not configured in secrets/,
+      );
+    });
+
+    it("makeWebConnectorLayer should succeed and isolate only the specified resource target", async () => {
+      const webLayer = await Effect.runPromise(
+        makeWebConnectorLayer(mockConfig, "golem-docs"),
+      );
+
+      const checkProgram = Effect.gen(function* () {
+        const webService = yield* WebConnectorService;
+        const docsConn = yield* webService.createConnector("golem-docs");
+        assert.equal(docsConn.source, "web");
+        assert.equal(docsConn.id, "web:golem-docs");
+
+        const unknownExit = yield* Effect.exit(
+          webService.createConnector("other-web"),
+        );
+        assert.ok(unknownExit._tag === "Failure");
+      });
+
+      await Effect.runPromise(checkProgram.pipe(Effect.provide(webLayer)));
+    });
+
+    it("makeWebConnectorLayer should fail fast when target resource is not found in secrets", async () => {
+      const exit = await Effect.runPromiseExit(
+        makeWebConnectorLayer(mockConfig, "non-existent"),
+      );
+
+      assert.ok(exit._tag === "Failure");
+      assert.match(
+        String(exit.cause),
+        /Web resource target 'non-existent' is not configured in secrets/,
+      );
     });
   });
 });

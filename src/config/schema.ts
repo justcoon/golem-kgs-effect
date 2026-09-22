@@ -142,6 +142,18 @@ export class ResourcesConfigValues extends Context.Service<
   ResourcesConfigShape
 >()("app/config/ResourcesConfigValues") {}
 
+export function parseS3Targets(
+  targets: ReadonlyArray<S3ResourceTarget>,
+): Record<string, S3ResourceTarget> {
+  return Object.fromEntries(targets.map((target) => [target.name, target]));
+}
+
+export function parseWebTargets(
+  targets: ReadonlyArray<WebResourceTarget>,
+): Record<string, WebResourceTarget> {
+  return Object.fromEntries(targets.map((target) => [target.name, target]));
+}
+
 export const RelationPatternRuleSchema = Schema.Struct({
   relation: Schema.String,
   phrases: Schema.Array(Schema.String),

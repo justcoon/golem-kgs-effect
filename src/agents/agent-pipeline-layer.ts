@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Redacted } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
 import {
@@ -19,43 +19,13 @@ import {
 import {
   EmbeddingConfigValues,
   type ExtractionConfig,
-  S3ResourcesConfig,
-  WebResourcesConfig,
-  type S3ResourceTarget,
-  type WebResourceTarget,
 } from "../config/schema.js";
 import type { AppAgentConfigService } from "../config/agent-config.js";
 import { createPostgresClient } from "../storage/database-client.js";
-import { S3ConnectorService } from "../connectors/s3-connector.js";
-import { WebConnectorService } from "../connectors/web-connector.js";
-
-function parseS3Targets(
-  resourcesVal: unknown,
-): Record<string, S3ResourceTarget> {
-  const s3Raw = (resourcesVal as { s3?: unknown })?.s3 ?? resourcesVal;
-  const s3Entries: [string, S3ResourceTarget][] = Array.isArray(s3Raw)
-    ? s3Raw.map((target: S3ResourceTarget) => [target.name, target])
-    : s3Raw instanceof Map
-      ? Array.from(s3Raw.entries())
-      : typeof s3Raw === "object" && s3Raw !== null
-        ? Object.entries(s3Raw as Record<string, S3ResourceTarget>)
-        : [];
-  return Object.fromEntries(s3Entries);
-}
-
-function parseWebTargets(
-  resourcesVal: unknown,
-): Record<string, WebResourceTarget> {
-  const webRaw = (resourcesVal as { web?: unknown })?.web ?? resourcesVal;
-  const webEntries: [string, WebResourceTarget][] = Array.isArray(webRaw)
-    ? webRaw.map((target: WebResourceTarget) => [target.name, target])
-    : webRaw instanceof Map
-      ? Array.from(webRaw.entries())
-      : typeof webRaw === "object" && webRaw !== null
-        ? Object.entries(webRaw as Record<string, WebResourceTarget>)
-        : [];
-  return Object.fromEntries(webEntries);
-}
+import {
+  makeS3ConnectorLayer,
+  makeWebConnectorLayer,
+} from "./connector-layers.js";
 
 /**
  * Builds the PostgreSQL client and storage repositories layer.
@@ -131,51 +101,12 @@ export const makeIngestionSemanticLayer = <E, R>(
     return { extractionLayer, resolverLayer };
   });
 
-/**
- * Builds the S3 connector service layer configured with S3 resource targets.
- */
-export const makeS3ConnectorLayer = (config: AppAgentConfigService) =>
-  Effect.gen(function* () {
-    const resourcesVal = Redacted.value(yield* config.resources.s3.get);
-    const s3Targets = parseS3Targets(resourcesVal);
-
-    const s3ConfigLayer = Layer.succeed(S3ResourcesConfig, {
-      s3: s3Targets,
-      getS3Resource: (name: string) =>
-        s3Targets[name] !== undefined
-          ? Option.some(s3Targets[name])
-          : Option.none(),
-    });
-
-    const httpLayer = FetchHttpClient.layer;
-    return S3ConnectorService.Live.pipe(
-      Layer.provide(s3ConfigLayer),
-      Layer.provide(httpLayer),
-    );
-  });
-
-/**
- * Builds the Web connector service layer configured with Web resource targets.
- */
-export const makeWebConnectorLayer = (config: AppAgentConfigService) =>
-  Effect.gen(function* () {
-    const resourcesVal = Redacted.value(yield* config.resources.web.get);
-    const webTargets = parseWebTargets(resourcesVal);
-
-    const webConfigLayer = Layer.succeed(WebResourcesConfig, {
-      web: webTargets,
-      getWebResource: (name: string) =>
-        webTargets[name] !== undefined
-          ? Option.some(webTargets[name])
-          : Option.none(),
-    });
-
-    const httpLayer = FetchHttpClient.layer;
-    return WebConnectorService.Live.pipe(
-      Layer.provide(webConfigLayer),
-      Layer.provide(httpLayer),
-    );
-  });
+export {
+  makeS3ConnectorLayer,
+  makeWebConnectorLayer,
+  parseS3Targets,
+  parseWebTargets,
+} from "./connector-layers.js";
 
 /**
  * Builds the GraphRAG retrieval service layer.
@@ -243,14 +174,17 @@ export const makeAccessAgentLayer = (config: AppAgentConfigService) =>
  * ExtractionService, and EntityResolverService.
  * Excludes WebConnectorService and GraphRAGService.
  */
-export const makeS3TaskAgentLayer = (config: AppAgentConfigService) =>
+export const makeS3TaskAgentLayer = (
+  config: AppAgentConfigService,
+  resourceName: string,
+) =>
   Effect.gen(function* () {
     const { sqlLayer, reposLayer } =
       yield* makeStorageAndRepositoriesLayer(config);
     const embeddingLayer = yield* makeEmbeddingLayer(config);
     const { extractionLayer, resolverLayer } =
       yield* makeIngestionSemanticLayer(config, reposLayer);
-    const s3Layer = yield* makeS3ConnectorLayer(config);
+    const s3Layer = yield* makeS3ConnectorLayer(config, resourceName);
 
     return Layer.mergeAll(
       sqlLayer,
@@ -268,14 +202,17 @@ export const makeS3TaskAgentLayer = (config: AppAgentConfigService) =>
  * ExtractionService, and EntityResolverService.
  * Excludes S3ConnectorService and GraphRAGService.
  */
-export const makeWebTaskAgentLayer = (config: AppAgentConfigService) =>
+export const makeWebTaskAgentLayer = (
+  config: AppAgentConfigService,
+  resourceName: string,
+) =>
   Effect.gen(function* () {
     const { sqlLayer, reposLayer } =
       yield* makeStorageAndRepositoriesLayer(config);
     const embeddingLayer = yield* makeEmbeddingLayer(config);
     const { extractionLayer, resolverLayer } =
       yield* makeIngestionSemanticLayer(config, reposLayer);
-    const webLayer = yield* makeWebConnectorLayer(config);
+    const webLayer = yield* makeWebConnectorLayer(config, resourceName);
 
     return Layer.mergeAll(
       sqlLayer,
@@ -283,33 +220,6 @@ export const makeWebTaskAgentLayer = (config: AppAgentConfigService) =>
       resolverLayer,
       embeddingLayer,
       webLayer,
-      extractionLayer,
-    );
-  });
-
-/**
- * Builds a composite Layer for all storage, pipeline, S3, and embedding services.
- * Retained for backward compatibility and multi-purpose test scenarios.
- */
-export const makeAgentPipelineLayer = (config: AppAgentConfigService) =>
-  Effect.gen(function* () {
-    const { sqlLayer, reposLayer } =
-      yield* makeStorageAndRepositoriesLayer(config);
-    const embeddingLayer = yield* makeEmbeddingLayer(config);
-    const graphRagLayer = makeGraphRAGLayer(reposLayer, embeddingLayer);
-    const { extractionLayer, resolverLayer } =
-      yield* makeIngestionSemanticLayer(config, reposLayer);
-    const s3Layer = yield* makeS3ConnectorLayer(config);
-    const webLayer = yield* makeWebConnectorLayer(config);
-
-    return Layer.mergeAll(
-      sqlLayer,
-      reposLayer,
-      resolverLayer,
-      embeddingLayer,
-      s3Layer,
-      webLayer,
-      graphRagLayer,
       extractionLayer,
     );
   });

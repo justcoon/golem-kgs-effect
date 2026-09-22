@@ -97,7 +97,7 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
   ({ resourceName }, snapshot) =>
     Effect.gen(function* () {
       const config = yield* AppAgentConfig;
-      const pipelineLayer = yield* makeS3TaskAgentLayer(config);
+      const pipelineLayer = yield* makeS3TaskAgentLayer(config, resourceName);
 
       const state = yield* snapshot.init({
         resourceName,

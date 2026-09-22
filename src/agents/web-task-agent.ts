@@ -97,7 +97,7 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
   ({ resourceName }, snapshot) =>
     Effect.gen(function* () {
       const config = yield* AppAgentConfig;
-      const pipelineLayer = yield* makeWebTaskAgentLayer(config);
+      const pipelineLayer = yield* makeWebTaskAgentLayer(config, resourceName);
 
       const state = yield* snapshot.init({
         resourceName,
