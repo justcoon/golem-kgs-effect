@@ -119,12 +119,9 @@ describe("Golem KGS Full End-to-End (E2E) Test Suite", () => {
     });
   });
 
-  describe("Suite 3: Event-Driven Webhook Ingestion", () => {
-    it("should trigger a sync via direct task agent webhook", async () => {
-      const summary = await client.sendWebhook("s3", "main", {
-        action: "sync",
-        force: true,
-      });
+  describe("Suite 3: Task Agent Ingestion & Document Retrieval", () => {
+    it("should trigger a sync via direct task agent sync endpoint", async () => {
+      const summary = await client.triggerIngestionSync("s3", "main", true);
 
       assert.equal(summary.status, "COMPLETED");
       assert.ok(

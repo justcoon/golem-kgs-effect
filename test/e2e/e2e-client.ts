@@ -9,7 +9,6 @@ import type {
   NeighborhoodResponse,
   SearchResponse,
   S3TaskStatusResponse,
-  WebhookIngestPayload,
 } from "../../src/agents/types.js";
 
 export interface McpTool {
@@ -175,24 +174,6 @@ export class E2EClient {
     throw new Error(
       `Timed out waiting for S3 sync completion after ${timeoutMs}ms. Last status: ${JSON.stringify(lastStatus)}`,
     );
-  }
-
-  async sendWebhook(
-    sourceType: "s3" | "web",
-    resourceName: string,
-    payload: WebhookIngestPayload,
-  ): Promise<S3TaskStatusResponse> {
-    const res = await this.request<S3TaskStatusResponse>(
-      "POST",
-      `/api/ingestion/${sourceType}/${encodeURIComponent(resourceName)}/webhook`,
-      { payload },
-    );
-    if (res.status !== 200) {
-      throw new Error(
-        `sendWebhook failed with status ${res.status}: ${JSON.stringify(res.data)}`,
-      );
-    }
-    return res.data;
   }
 
   // --- Knowledge Search Endpoints ---

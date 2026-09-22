@@ -267,12 +267,6 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
       description:
         "Called by Golem host timer to execute scheduled sync and schedule next cycle",
     }),
-    ingestWebhook: method({
-      params: { payload: WebhookIngestPayloadSchema },
-      success: S3TaskStatusResponseSchema,
-      description: "Push webhook ingress for external change events",
-      http: [Http.post("/webhook")],
-    }),
   },
 });
 ```
@@ -352,12 +346,6 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
       success: Schema.Boolean,
       description:
         "Called by Golem host timer to execute scheduled sync and schedule next cycle",
-    }),
-    ingestWebhook: method({
-      params: { payload: WebhookIngestPayloadSchema },
-      success: WebTaskStatusResponseSchema,
-      description: "Push webhook ingress for external change events",
-      http: [Http.post("/webhook")],
     }),
   },
 });

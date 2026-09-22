@@ -4,7 +4,6 @@ import {
   calculateScheduledAt,
   WebTaskStateSchema,
   WebTaskStatusResponseSchema,
-  WebhookIngestPayloadSchema,
   type WebTaskState,
   type WebTaskStatusResponse,
 } from "./types.js";
@@ -81,14 +80,6 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
       success: Schema.Boolean,
       description:
         "Called by Golem host timer to execute scheduled sync and schedule next cycle",
-    }),
-    ingestWebhook: method({
-      params: {
-        payload: WebhookIngestPayloadSchema,
-      },
-      success: WebTaskStatusResponseSchema,
-      description: "Push webhook ingress for external change events",
-      http: [Http.post("/webhook")],
     }),
   },
 });
@@ -224,14 +215,6 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
             }
             return true;
           }).pipe(Effect.orDie),
-
-        ingestWebhook: ({ payload }) =>
-          Effect.gen(function* () {
-            yield* Effect.logInfo(
-              `Push webhook received for web:${resourceName} (action=${payload.action ?? "default"})`,
-            );
-            return yield* doSync(payload.force);
-          }),
       };
     }),
 );

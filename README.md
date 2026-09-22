@@ -185,31 +185,29 @@ High-throughput query and retrieval interface exposing GraphRAG question answeri
 
 ## HTTP Endpoints Quick Reference
 
-| Agent                  | Function         | HTTP   | Route                                             | Description                                                         |
-| :--------------------- | :--------------- | :----- | :------------------------------------------------ | :------------------------------------------------------------------ |
-| `S3IngestorTaskAgent`  | `sync`           | `POST` | `/api/ingestion/s3/{resourceName}/sync`           | Incremental S3 ETL sync (embeddings, chunks, graph triples)         |
-| `S3IngestorTaskAgent`  | `getStatus`      | `GET`  | `/api/ingestion/s3/{resourceName}/status`         | S3 sync metrics, execution status, and timestamps                   |
-| `S3IngestorTaskAgent`  | `resetCursor`    | `POST` | `/api/ingestion/s3/{resourceName}/reset`          | Reset cursor to force full S3 rescan                                |
-| `S3IngestorTaskAgent`  | `startSchedule`  | `POST` | `/api/ingestion/s3/{resourceName}/schedule/start` | Start recurring synchronization via Golem host timer                |
-| `S3IngestorTaskAgent`  | `stopSchedule`   | `POST` | `/api/ingestion/s3/{resourceName}/schedule/stop`  | Stop recurring synchronization                                      |
-| `S3IngestorTaskAgent`  | `ingestWebhook`  | `POST` | `/api/ingestion/s3/{resourceName}/webhook`        | Push webhook ingress for external change events                     |
-| `WebIngestorTaskAgent` | `sync`           | `POST` | `/api/ingestion/web/{resourceName}/sync`          | Incremental Web ETL sync (sitemaps, HTML-to-markdown, GraphRAG)     |
-| `WebIngestorTaskAgent` | `getStatus`      | `GET`  | `/api/ingestion/web/{resourceName}/status`        | Web sync metrics, execution status, and timestamps                  |
-| `WebIngestorTaskAgent` | `resetCursor`    | `POST` | `/api/ingestion/web/{resourceName}/reset`         | Reset cursor to force full Web rescan                               |
-| `WebIngestorTaskAgent` | `startSchedule`  | `POST` | `/api/ingestion/web/{resourceName}/schedule/start`| Start recurring synchronization via Golem host timer                |
-| `WebIngestorTaskAgent` | `stopSchedule`   | `POST` | `/api/ingestion/web/{resourceName}/schedule/stop` | Stop recurring synchronization                                      |
-| `WebIngestorTaskAgent` | `ingestWebhook`  | `POST` | `/api/ingestion/web/{resourceName}/webhook`       | Push webhook ingress for external change events                     |
-| `KnowledgeAccessAgent` | `ask`            | `POST` | `/api/knowledge/ask`                              | GraphRAG question answering with synthesized markdown answer        |
-| `KnowledgeAccessAgent`      | `graphRag`           | `POST` | `/api/knowledge/graphrag`                              | GraphRAG context retrieval bundle (chunks, entities, relationships) |
-| `KnowledgeAccessAgent`      | `search`             | `POST` | `/api/knowledge/search`                                | Hybrid search combining pgvector cosine distance & full-text RRF    |
-| `KnowledgeAccessAgent`      | `searchEntities`     | `POST` | `/api/knowledge/entities/search`                       | Entity search and autocomplete by prefix, name, or alias            |
-| `KnowledgeAccessAgent`      | `getTopEntities`     | `POST` | `/api/knowledge/entities/top`                          | Top connected hub entities sorted by degree and freshness           |
-| `KnowledgeAccessAgent`      | `getNeighborhood`    | `POST` | `/api/knowledge/neighborhood`                          | Multi-hop topological graph traversal around seed entities          |
-| `KnowledgeAccessAgent`      | `findPaths`          | `POST` | `/api/knowledge/paths`                                 | Relational shortest-path search between two entities                |
-| `KnowledgeAccessAgent`      | `getOverview`        | `GET`  | `/api/knowledge/overview`                              | Knowledge base statistics & supported sources summary               |
-| `KnowledgeAccessAgent`      | `getEntity`          | `GET`  | `/api/knowledge/entities/{id}`                         | Entity metadata, attributes, and known aliases                      |
-| `KnowledgeAccessAgent`      | `getEntityDocuments` | `GET`  | `/api/knowledge/entities/{id}/documents`               | Summary list of all documents referencing an entity                 |
-| `KnowledgeAccessAgent`      | `getDocument`        | `GET`  | `/api/knowledge/documents/{id}`                        | Raw document content, title, and metadata                           |
+| Agent                  | Function             | HTTP   | Route                                              | Description                                                         |
+| :--------------------- | :------------------- | :----- | :------------------------------------------------- | :------------------------------------------------------------------ |
+| `S3IngestorTaskAgent`  | `sync`               | `POST` | `/api/ingestion/s3/{resourceName}/sync`            | Incremental S3 ETL sync (embeddings, chunks, graph triples)         |
+| `S3IngestorTaskAgent`  | `getStatus`          | `GET`  | `/api/ingestion/s3/{resourceName}/status`          | S3 sync metrics, execution status, and timestamps                   |
+| `S3IngestorTaskAgent`  | `resetCursor`        | `POST` | `/api/ingestion/s3/{resourceName}/reset`           | Reset cursor to force full S3 rescan                                |
+| `S3IngestorTaskAgent`  | `startSchedule`      | `POST` | `/api/ingestion/s3/{resourceName}/schedule/start`  | Start recurring synchronization via Golem host timer                |
+| `S3IngestorTaskAgent`  | `stopSchedule`       | `POST` | `/api/ingestion/s3/{resourceName}/schedule/stop`   | Stop recurring synchronization                                      |
+| `WebIngestorTaskAgent` | `sync`               | `POST` | `/api/ingestion/web/{resourceName}/sync`           | Incremental Web ETL sync (sitemaps, HTML-to-markdown, GraphRAG)     |
+| `WebIngestorTaskAgent` | `getStatus`          | `GET`  | `/api/ingestion/web/{resourceName}/status`         | Web sync metrics, execution status, and timestamps                  |
+| `WebIngestorTaskAgent` | `resetCursor`        | `POST` | `/api/ingestion/web/{resourceName}/reset`          | Reset cursor to force full Web rescan                               |
+| `WebIngestorTaskAgent` | `startSchedule`      | `POST` | `/api/ingestion/web/{resourceName}/schedule/start` | Start recurring synchronization via Golem host timer                |
+| `WebIngestorTaskAgent` | `stopSchedule`       | `POST` | `/api/ingestion/web/{resourceName}/schedule/stop`  | Stop recurring synchronization                                      |
+| `KnowledgeAccessAgent` | `ask`                | `POST` | `/api/knowledge/ask`                               | GraphRAG question answering with synthesized markdown answer        |
+| `KnowledgeAccessAgent` | `graphRag`           | `POST` | `/api/knowledge/graphrag`                          | GraphRAG context retrieval bundle (chunks, entities, relationships) |
+| `KnowledgeAccessAgent` | `search`             | `POST` | `/api/knowledge/search`                            | Hybrid search combining pgvector cosine distance & full-text RRF    |
+| `KnowledgeAccessAgent` | `searchEntities`     | `POST` | `/api/knowledge/entities/search`                   | Entity search and autocomplete by prefix, name, or alias            |
+| `KnowledgeAccessAgent` | `getTopEntities`     | `POST` | `/api/knowledge/entities/top`                      | Top connected hub entities sorted by degree and freshness           |
+| `KnowledgeAccessAgent` | `getNeighborhood`    | `POST` | `/api/knowledge/neighborhood`                      | Multi-hop topological graph traversal around seed entities          |
+| `KnowledgeAccessAgent` | `findPaths`          | `POST` | `/api/knowledge/paths`                             | Relational shortest-path search between two entities                |
+| `KnowledgeAccessAgent` | `getOverview`        | `GET`  | `/api/knowledge/overview`                          | Knowledge base statistics & supported sources summary               |
+| `KnowledgeAccessAgent` | `getEntity`          | `GET`  | `/api/knowledge/entities/{id}`                     | Entity metadata, attributes, and known aliases                      |
+| `KnowledgeAccessAgent` | `getEntityDocuments` | `GET`  | `/api/knowledge/entities/{id}/documents`           | Summary list of all documents referencing an entity                 |
+| `KnowledgeAccessAgent` | `getDocument`        | `GET`  | `/api/knowledge/documents/{id}`                    | Raw document content, title, and metadata                           |
 
 ---
 
@@ -541,6 +539,7 @@ npm run test:e2e
 ```
 
 The E2E test runner exercises the entire pipeline end-to-end across 7 test suites:
+
 1. **Gateway Connectivity & Agent Initialization**: Verifies HTTP gateway connectivity and status for `KnowledgeAccessAgent` and `S3IngestorTaskAgent`.
 2. **S3 Ingestion & Checkpointing**: Triggers S3 sync, polls completion, verifies document/entity persistence in PostgreSQL, and verifies incremental checkpointing skips unchanged files.
 3. **Event-Driven Webhook Ingestion**: Invokes direct task agent webhooks (`/webhook`) and verifies on-demand indexing and document retrieval.
@@ -548,7 +547,6 @@ The E2E test runner exercises the entire pipeline end-to-end across 7 test suite
 5. **Knowledge Graph Traversal**: Validates degree centrality hub entity listing, entity name/alias search, and 2-hop neighborhood exploration.
 6. **GraphRAG Context Retrieval & Synthesis**: Tests grounded context bundle retrieval and answer synthesis with citations via the `/ask` endpoint.
 7. **Model Context Protocol (MCP) Streamable HTTP Invocations**: Verifies MCP session handshake (`initialize`), dynamic tool discovery (`tools/list` exposing `KnowledgeAccessAgent` tools), and live tool execution (`tools/call` for `search` and `ask`).
-
 
 The Golem HTTP Gateway will be active on **`http://localhost:9006`**, and the Golem MCP Gateway will be active on **`http://localhost:9007/mcp`**.
 
@@ -628,6 +626,7 @@ curl -X POST 'http://localhost:9006/api/ingestion/s3/main/webhook' \
 Answers natural language questions grounded in retrieved document chunks and knowledge graph relationships. Synthesizes coherent, cited answers using an LLM (e.g. `qwen2.5:1.5b` or `llama3.2:3b` via Ollama, or OpenRouter) with automatic fallback to deterministic synthesis if the LLM is unavailable. Formatted in clean GitHub-Flavored Markdown with source citations, key entity highlights, and relationship insights ready for rich display in frontend and MCP clients.
 
 > [!NOTE]
+>
 > - `generateAnswer` defaults to `false` to provide ultra-fast retrieval responses without answer synthesis latency. Pass `"generateAnswer": true` in the request body to generate an answer.
 > - When generating an answer, whether the LLM is used is controlled by the secret configuration `llm.useForAsk` (defaults to `false` in `.env`, using deterministic template generation).
 > - Because `llm.useForAsk` is backed by a **Golem Secret**, operators can dynamically toggle LLM synthesis live via CLI without redeploying:
