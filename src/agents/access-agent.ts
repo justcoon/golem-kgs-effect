@@ -470,10 +470,7 @@ export const KnowledgeAccessAgent = defineAgent({
           });
 
           const citations: Citation[] = bundle.relevantChunks.map((chunk) => {
-            const meta =
-              chunk.metadata && typeof chunk.metadata === "object"
-                ? (chunk.metadata as Record<string, unknown>)
-                : {};
+            const meta = chunk.metadata ?? {};
 
             const sourceUri =
               typeof meta.sourceUri === "string"

@@ -9,10 +9,10 @@ import {
 
 interface CheckpointRow {
   readonly connector_id: string;
-  readonly cursor_data: unknown;
+  readonly cursor_data: string | Record<string, unknown> | null;
   readonly last_sync_time: Date | string;
-  readonly status: string;
-  readonly metrics: unknown;
+  readonly status: SyncStatus;
+  readonly metrics: string | Record<string, unknown> | null;
   readonly updated_at: Date | string;
 }
 
@@ -20,7 +20,7 @@ const mapCheckpointRow = (row: CheckpointRow): SyncCheckpoint => ({
   connectorId: row.connector_id,
   cursorData: parseJsonOr(row.cursor_data, {}),
   lastSyncTime: new Date(row.last_sync_time),
-  status: row.status as SyncStatus,
+  status: row.status,
   metrics: parseJsonOr(row.metrics, {}),
   updatedAt: new Date(row.updated_at),
 });
@@ -42,7 +42,7 @@ CheckpointRepository.Default = Layer.effect(
         const status = input.status ?? "IDLE";
         const metrics = Pg.jsonb(input.metrics ?? {});
 
-        const rows = (yield* sql<CheckpointRow>`
+        const rows = yield* sql<CheckpointRow>`
             INSERT INTO sync_checkpoints (connector_id, cursor_data, last_sync_time, status, metrics, updated_at)
             VALUES (${input.connectorId}, ${cursor}, NOW(), ${status}, ${metrics}, NOW())
             ON CONFLICT (connector_id) DO UPDATE SET
@@ -52,7 +52,7 @@ CheckpointRepository.Default = Layer.effect(
               metrics = EXCLUDED.metrics,
               updated_at = NOW()
             RETURNING connector_id, cursor_data, last_sync_time, status, metrics, updated_at
-          `) as ReadonlyArray<CheckpointRow>;
+          `;
 
         const row = rows[0];
         if (!row) {
@@ -63,12 +63,12 @@ CheckpointRepository.Default = Layer.effect(
 
     const getCheckpoint = (connectorId: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<CheckpointRow>`
+        const rows = yield* sql<CheckpointRow>`
             SELECT connector_id, cursor_data, last_sync_time, status, metrics, updated_at
             FROM sync_checkpoints
             WHERE connector_id = ${connectorId}
             LIMIT 1
-          `) as ReadonlyArray<CheckpointRow>;
+          `;
 
         const row = rows[0];
         return row ? Option.some(mapCheckpointRow(row)) : Option.none();
@@ -76,11 +76,11 @@ CheckpointRepository.Default = Layer.effect(
 
     const listCheckpoints = () =>
       Effect.gen(function* () {
-        const rows = (yield* sql<CheckpointRow>`
+        const rows = yield* sql<CheckpointRow>`
             SELECT connector_id, cursor_data, last_sync_time, status, metrics, updated_at
             FROM sync_checkpoints
             ORDER BY last_sync_time DESC
-          `) as ReadonlyArray<CheckpointRow>;
+          `;
 
         return rows.map(mapCheckpointRow);
       });
@@ -96,9 +96,9 @@ CheckpointRepository.Default = Layer.effect(
 
     const getLatestSyncTime = () =>
       Effect.gen(function* () {
-        const rows = (yield* sql<{ last_sync: Date | string | null }>`
+        const rows = yield* sql<{ last_sync: Date | string | null }>`
             SELECT MAX(last_sync_time) AS last_sync FROM sync_checkpoints
-          `) as ReadonlyArray<{ last_sync: Date | string | null }>;
+          `;
 
         const raw = rows[0]?.last_sync;
         return raw ? Option.some(new Date(raw)) : Option.none();

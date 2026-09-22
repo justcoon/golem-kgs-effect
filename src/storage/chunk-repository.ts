@@ -18,7 +18,7 @@ interface DocumentRow {
   readonly id: string;
   readonly title: string;
   readonly content: string;
-  readonly metadata: unknown;
+  readonly metadata: string | Record<string, unknown> | null;
   readonly tags: ReadonlyArray<string>;
   readonly source: string;
   readonly resource_name: string;
@@ -35,7 +35,7 @@ interface ChunkRow {
   readonly content: string;
   readonly token_count: number;
   readonly embedding: ReadonlyArray<number> | null;
-  readonly metadata: unknown;
+  readonly metadata: string | Record<string, unknown> | null;
   readonly created_at: Date | string;
   readonly updated_at: Date | string;
 }
@@ -45,7 +45,7 @@ interface SearchRow {
   readonly document_id: string;
   readonly content: string;
   readonly score: number;
-  readonly metadata: unknown;
+  readonly metadata: string | Record<string, unknown> | null;
 }
 
 const mapDocumentRow = (row: DocumentRow): RawDocument => ({
@@ -90,7 +90,7 @@ ChunkRepository.Default = Layer.effect(
         const meta = Pg.jsonb(doc.metadata ?? {});
         const tags = Pg.array(doc.tags ?? []);
 
-        const rows = (yield* sql<DocumentRow>`
+        const rows = yield* sql<DocumentRow>`
             INSERT INTO documents (id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, updated_at)
             VALUES (${doc.id}, ${doc.title}, ${doc.content}, ${meta}, ${tags}, ${doc.source}, ${doc.resourceName}, ${doc.sourceKey}, ${doc.sizeBytes}, NOW())
             ON CONFLICT (id) DO UPDATE SET
@@ -104,7 +104,7 @@ ChunkRepository.Default = Layer.effect(
               size_bytes = EXCLUDED.size_bytes,
               updated_at = NOW()
             RETURNING id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, created_at, updated_at
-          `) as ReadonlyArray<DocumentRow>;
+          `;
 
         const row = rows[0];
         if (!row) {
@@ -115,12 +115,12 @@ ChunkRepository.Default = Layer.effect(
 
     const getRawDocument = (id: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<DocumentRow>`
+        const rows = yield* sql<DocumentRow>`
             SELECT id, title, content, metadata, tags, source, resource_name, source_key, size_bytes, created_at, updated_at
             FROM documents
             WHERE id = ${id}
             LIMIT 1
-          `) as ReadonlyArray<DocumentRow>;
+          `;
 
         const row = rows[0];
         return row ? Option.some(mapDocumentRow(row)) : Option.none();
@@ -133,7 +133,7 @@ ChunkRepository.Default = Layer.effect(
           ? Pg.vector(input.embedding)
           : null;
 
-        const rows = (yield* sql<ChunkRow>`
+        const rows = yield* sql<ChunkRow>`
             INSERT INTO chunks (id, document_id, chunk_index, content, token_count, embedding, metadata, updated_at)
             VALUES (${input.id}, ${input.documentId}, ${input.chunkIndex}, ${input.content}, ${input.tokenCount ?? 0}, ${embeddingParam}, ${meta}, NOW())
             ON CONFLICT (document_id, chunk_index) DO UPDATE SET
@@ -144,7 +144,7 @@ ChunkRepository.Default = Layer.effect(
               metadata = EXCLUDED.metadata,
               updated_at = NOW()
             RETURNING id, document_id, chunk_index, content, token_count, embedding, metadata, created_at, updated_at
-          `) as ReadonlyArray<ChunkRow>;
+          `;
 
         const row = rows[0];
         if (!row) {
@@ -155,12 +155,12 @@ ChunkRepository.Default = Layer.effect(
 
     const getChunksByDocument = (documentId: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<ChunkRow>`
+        const rows = yield* sql<ChunkRow>`
             SELECT id, document_id, chunk_index, content, token_count, embedding, metadata, created_at, updated_at
             FROM chunks
             WHERE document_id = ${documentId}
             ORDER BY chunk_index ASC
-          `) as ReadonlyArray<ChunkRow>;
+          `;
 
         return rows.map(mapChunkRow);
       });
@@ -181,13 +181,13 @@ ChunkRepository.Default = Layer.effect(
 
     const getChunksForEntity = (entityId: string) =>
       Effect.gen(function* () {
-        const rows = (yield* sql<ChunkRow>`
+        const rows = yield* sql<ChunkRow>`
             SELECT c.id, c.document_id, c.chunk_index, c.content, c.token_count, c.embedding, c.metadata, c.created_at, c.updated_at
             FROM entity_chunks ec
             JOIN chunks c ON ec.chunk_id = c.id
             WHERE ec.entity_id = ${entityId}
             ORDER BY ec.confidence DESC
-          `) as ReadonlyArray<ChunkRow>;
+          `;
 
         return rows.map(mapChunkRow);
       });
@@ -195,13 +195,13 @@ ChunkRepository.Default = Layer.effect(
     const getEntityIdsForChunks = (chunkIds: ReadonlyArray<string>) =>
       Effect.gen(function* () {
         if (chunkIds.length === 0) {
-          return [] as ReadonlyArray<string>;
+          return [];
         }
-        const rows = (yield* sql<{ entity_id: string }>`
+        const rows = yield* sql<{ entity_id: string }>`
             SELECT DISTINCT entity_id
             FROM entity_chunks
             WHERE chunk_id = ANY(${Pg.array(chunkIds)})
-          `) as ReadonlyArray<{ entity_id: string }>;
+          `;
 
         return rows.map((r) => r.entity_id);
       });
@@ -214,27 +214,25 @@ ChunkRepository.Default = Layer.effect(
         const topK = query.topK ?? 10;
         const thresh = Pg.float8(query.threshold ?? 0.0);
 
-        const rows = (
-          query.documentId
-            ? yield* sql<SearchRow>`
-                  SELECT id, document_id, content, metadata,
-                         (1 - (embedding <=> ${vec1})) AS score
-                  FROM chunks
-                  WHERE document_id = ${query.documentId}
-                    AND (1 - (embedding <=> ${vec2})) >= ${thresh}
-                  ORDER BY embedding <=> ${vec3} ASC
-                  LIMIT ${topK}
-                `
-            : yield* sql<SearchRow>`
-                  SELECT id, document_id, content, metadata,
-                         (1 - (embedding <=> ${vec1})) AS score
-                  FROM chunks
-                  WHERE embedding IS NOT NULL
-                    AND (1 - (embedding <=> ${vec2})) >= ${thresh}
-                  ORDER BY embedding <=> ${vec3} ASC
-                  LIMIT ${topK}
-                `
-        ) as ReadonlyArray<SearchRow>;
+        const rows = query.documentId
+          ? yield* sql<SearchRow>`
+                SELECT id, document_id, content, metadata,
+                       (1 - (embedding <=> ${vec1})) AS score
+                FROM chunks
+                WHERE document_id = ${query.documentId}
+                  AND (1 - (embedding <=> ${vec2})) >= ${thresh}
+                ORDER BY embedding <=> ${vec3} ASC
+                LIMIT ${topK}
+              `
+          : yield* sql<SearchRow>`
+                SELECT id, document_id, content, metadata,
+                       (1 - (embedding <=> ${vec1})) AS score
+                FROM chunks
+                WHERE embedding IS NOT NULL
+                  AND (1 - (embedding <=> ${vec2})) >= ${thresh}
+                ORDER BY embedding <=> ${vec3} ASC
+                LIMIT ${topK}
+              `;
 
         return rows.map((r) => ({
           chunkId: r.id,
@@ -249,14 +247,14 @@ ChunkRepository.Default = Layer.effect(
       Effect.gen(function* () {
         const limit = query.limit ?? 10;
 
-        const rows = (yield* sql<SearchRow>`
+        const rows = yield* sql<SearchRow>`
             SELECT id, document_id, content, metadata,
                    ts_rank(to_tsvector('english', content), plainto_tsquery('english', ${query.query})) AS score
             FROM chunks
             WHERE to_tsvector('english', content) @@ plainto_tsquery('english', ${query.query})
             ORDER BY score DESC
             LIMIT ${limit}
-          `) as ReadonlyArray<SearchRow>;
+          `;
 
         return rows.map((r) => ({
           chunkId: r.id,

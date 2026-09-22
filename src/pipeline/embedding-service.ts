@@ -4,7 +4,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
-import { type VectorEmbedding } from "../domain/chunk.js";
+import { VectorEmbedding } from "../domain/chunk.js";
 import { EmbeddingConfigValues } from "../config/schema.js";
 
 export const EMBEDDING_DIMENSION = 768;
@@ -15,7 +15,7 @@ export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
 }> {}
 
 const OpenAiEmbeddingItem = Schema.Struct({
-  embedding: Schema.Array(Schema.Number),
+  embedding: VectorEmbedding,
   index: Schema.optional(Schema.Number),
 });
 
@@ -131,7 +131,7 @@ export class EmbeddingService extends Context.Service<
                 }),
               );
             }
-            embeddings.push(vector as unknown as VectorEmbedding);
+            embeddings.push(vector);
           }
 
           return embeddings;
@@ -193,5 +193,5 @@ export function createMockEmbedding(text: string): VectorEmbedding {
     vector[i] = Number(((val ?? 0) / norm).toFixed(6));
   }
 
-  return vector as unknown as VectorEmbedding;
+  return vector;
 }
