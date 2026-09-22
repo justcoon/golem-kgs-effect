@@ -642,7 +642,10 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         processedKeys?: Record<string, string>;
       };
       assert.equal(cursorData.processedKeys?.["rfcs/rfc-001.md"], "etag_rfc_1");
-      assert.equal(cursorData.processedKeys?.["specs/spec-001.md"], "etag_spec_1");
+      assert.equal(
+        cursorData.processedKeys?.["specs/spec-001.md"],
+        "etag_spec_1",
+      );
       assert.equal(cursorData.processedKeys?.["ignored/notes.txt"], undefined);
     });
 
@@ -738,8 +741,7 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
     it("should persist and load processedUrls directly from CheckpointRepository during web ingestion", async () => {
       const mockWebClient = HttpClient.make((req) =>
         Effect.sync(() => {
-          const isIfNoneMatch =
-            req.headers["if-none-match"] === '"web_etag_1"';
+          const isIfNoneMatch = req.headers["if-none-match"] === '"web_etag_1"';
           if (isIfNoneMatch) {
             return HttpClientResponse.fromWeb(
               req,

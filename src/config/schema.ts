@@ -104,14 +104,11 @@ export const WebResourceTargetSchema = Schema.Struct({
 });
 export type WebResourceTarget = typeof WebResourceTargetSchema.Type;
 
-export const ResourcesSecretSchema = Schema.Struct({
-  s3: Schema.Array(S3ResourceTargetSchema),
-  web: Schema.Array(WebResourceTargetSchema),
-});
-export type ResourcesSecretSchema = typeof ResourcesSecretSchema.Type;
-
 export const ResourcesConfigFields = {
-  resources: Schema.Redacted(ResourcesSecretSchema),
+  resources: Schema.Struct({
+    s3: Schema.Redacted(Schema.Array(S3ResourceTargetSchema)),
+    web: Schema.Redacted(Schema.Array(WebResourceTargetSchema)),
+  }),
 };
 
 export const ResourcesConfigSchema = Schema.Struct(ResourcesConfigFields);

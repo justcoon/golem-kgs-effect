@@ -10,7 +10,7 @@ import {
 } from "./schema.js";
 
 function parseS3Targets(val: unknown): Record<string, S3ResourceTarget> {
-  const s3Raw = (val as { s3?: unknown })?.s3;
+  const s3Raw = (val as { s3?: unknown })?.s3 ?? val;
   const s3Entries: [string, S3ResourceTarget][] = Array.isArray(s3Raw)
     ? s3Raw.map((target: S3ResourceTarget) => [target.name, target])
     : s3Raw instanceof Map
@@ -22,7 +22,7 @@ function parseS3Targets(val: unknown): Record<string, S3ResourceTarget> {
 }
 
 function parseWebTargets(val: unknown): Record<string, WebResourceTarget> {
-  const webRaw = (val as { web?: unknown })?.web;
+  const webRaw = (val as { web?: unknown })?.web ?? val;
   const webEntries: [string, WebResourceTarget][] = Array.isArray(webRaw)
     ? webRaw.map((target: WebResourceTarget) => [target.name, target])
     : webRaw instanceof Map
@@ -41,7 +41,7 @@ export class ResourcesConfig extends defineConfig(
     S3ResourcesConfig,
     Effect.gen(function* () {
       const config = yield* ResourcesConfig;
-      const secret = yield* config.resources.get;
+      const secret = yield* config.resources.s3.get;
       const val = Redacted.value(secret);
       const s3Targets = parseS3Targets(val);
 
@@ -57,7 +57,7 @@ export class ResourcesConfig extends defineConfig(
     WebResourcesConfig,
     Effect.gen(function* () {
       const config = yield* ResourcesConfig;
-      const secret = yield* config.resources.get;
+      const secret = yield* config.resources.web.get;
       const val = Redacted.value(secret);
       const webTargets = parseWebTargets(val);
 
@@ -73,10 +73,10 @@ export class ResourcesConfig extends defineConfig(
     ResourcesConfigValues,
     Effect.gen(function* () {
       const config = yield* ResourcesConfig;
-      const secret = yield* config.resources.get;
-      const val = Redacted.value(secret);
-      const s3Targets = parseS3Targets(val);
-      const webTargets = parseWebTargets(val);
+      const s3Secret = yield* config.resources.s3.get;
+      const webSecret = yield* config.resources.web.get;
+      const s3Targets = parseS3Targets(Redacted.value(s3Secret));
+      const webTargets = parseWebTargets(Redacted.value(webSecret));
 
       return {
         s3: s3Targets,

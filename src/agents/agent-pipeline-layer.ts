@@ -32,7 +32,7 @@ import { WebConnectorService } from "../connectors/web-connector.js";
 function parseS3Targets(
   resourcesVal: unknown,
 ): Record<string, S3ResourceTarget> {
-  const s3Raw = (resourcesVal as { s3?: unknown })?.s3;
+  const s3Raw = (resourcesVal as { s3?: unknown })?.s3 ?? resourcesVal;
   const s3Entries: [string, S3ResourceTarget][] = Array.isArray(s3Raw)
     ? s3Raw.map((target: S3ResourceTarget) => [target.name, target])
     : s3Raw instanceof Map
@@ -46,7 +46,7 @@ function parseS3Targets(
 function parseWebTargets(
   resourcesVal: unknown,
 ): Record<string, WebResourceTarget> {
-  const webRaw = (resourcesVal as { web?: unknown })?.web;
+  const webRaw = (resourcesVal as { web?: unknown })?.web ?? resourcesVal;
   const webEntries: [string, WebResourceTarget][] = Array.isArray(webRaw)
     ? webRaw.map((target: WebResourceTarget) => [target.name, target])
     : webRaw instanceof Map
@@ -136,7 +136,7 @@ export const makeIngestionSemanticLayer = <E, R>(
  */
 export const makeS3ConnectorLayer = (config: AppAgentConfigService) =>
   Effect.gen(function* () {
-    const resourcesVal = Redacted.value(yield* config.resources.get);
+    const resourcesVal = Redacted.value(yield* config.resources.s3.get);
     const s3Targets = parseS3Targets(resourcesVal);
 
     const s3ConfigLayer = Layer.succeed(S3ResourcesConfig, {
@@ -159,7 +159,7 @@ export const makeS3ConnectorLayer = (config: AppAgentConfigService) =>
  */
 export const makeWebConnectorLayer = (config: AppAgentConfigService) =>
   Effect.gen(function* () {
-    const resourcesVal = Redacted.value(yield* config.resources.get);
+    const resourcesVal = Redacted.value(yield* config.resources.web.get);
     const webTargets = parseWebTargets(resourcesVal);
 
     const webConfigLayer = Layer.succeed(WebResourcesConfig, {
