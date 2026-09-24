@@ -137,6 +137,66 @@ flowchart TD
    - Directed relations are stored in `edges` with compound primary key `(source_id, target_id, relation_type)`.
    - The provenance table `entity_chunks` links graph nodes back to their source chunks, allowing full traceability from graph traversal back to source citations.
 
+#### The Core Ingestion Pipeline in Effect
+
+Here is how these five stages compose cleanly into a single typed Effect pipeline inside [`src/pipeline/document-processor.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/document-processor.ts):
+
+```typescript
+/**
+ * Shared document indexing pipeline in Effect:
+ * Saves raw doc -> chunks hierarchically -> generates embeddings ->
+ * upserts chunks -> extracts & resolves entities -> persists provenance links.
+ */
+export function processAndIndexDocument(
+  document: RawDocument,
+): Effect.Effect<
+  void,
+  SqlError | EmbeddingError,
+  | DocumentRepository
+  | ChunkRepository
+  | EntityResolverService
+  | EmbeddingService
+  | ExtractionService
+> {
+  return Effect.gen(function* () {
+    const docRepo = yield* DocumentRepository;
+    const chunkRepo = yield* ChunkRepository;
+    const entityResolver = yield* EntityResolverService;
+    const embeddingService = yield* EmbeddingService;
+    const extractionService = yield* ExtractionService;
+
+    // 1. Ingress & deterministic document persistence
+    yield* docRepo.saveDocument(document);
+
+    // 2. Semantic hierarchical chunking
+    const chunkResult = yield* DocumentChunker.chunkDocument(document);
+    if (chunkResult.chunks.length === 0) return;
+
+    // 3. Batch dense vector embedding generation
+    const texts = chunkResult.chunks.map((c) => c.content);
+    const embeddings = yield* embeddingService.generateEmbeddings(texts);
+
+    // 4 & 5. Upsert chunks, extract entities/relations, and fuse into graph
+    for (let i = 0; i < chunkResult.chunks.length; i++) {
+      const chunk = chunkResult.chunks[i]!;
+      yield* chunkRepo.upsertChunk({ ...chunk, embedding: embeddings[i] });
+
+      const knowledge = yield* extractionService.extractFromChunk(chunk);
+      yield* entityResolver.fuseKnowledge(knowledge);
+
+      for (const entity of knowledge.entities) {
+        yield* chunkRepo.linkEntityChunk({
+          entityId: entity.id,
+          chunkId: chunk.id,
+          mentionText: entity.name,
+          confidence: Number(entity.metadata?.confidence ?? 1.0),
+        });
+      }
+    }
+  });
+}
+```
+
 ---
 
 ## 3. Dynamic Sources & Secret-Driven Configuration
@@ -180,6 +240,46 @@ In standard microservice architectures, workers often load global credential bun
 - **Strict Validation & Fail-Fast**: When `makeS3ConnectorLayer(config, resourceName)` or `makeWebConnectorLayer(config, resourceName)` is invoked, it validates that `resourceName` exists in secrets, immediately raising a typed `ConnectorError` during initialization if absent.
 - **Credential Isolation**: The resulting `S3ResourcesConfig` or `WebResourcesConfig` service provided to the worker fiber contains **only** the configuration for that specific resource. A worker ingesting the `legal` bucket has zero access to the `financial` or `engineering` credentials in the secret store.
 - **Decoupled Architecture**: Pure connector layer factories are completely isolated from database drivers and native host bindings, allowing unit and integration tests to execute cleanly without external runtime dependencies.
+
+```typescript
+/**
+ * Builds an S3 connector layer scoped strictly to a specific resource target.
+ * Guarantees zero credential leakage across buckets.
+ */
+export const makeS3ConnectorLayer = (
+  config: AppAgentConfigService,
+  resourceName: string,
+) =>
+  Effect.gen(function* () {
+    // 1. Unpack redacted configuration from Golem secrets
+    const resourcesVal = Redacted.value(yield* config.resources.s3.get);
+    const s3Targets = parseS3Targets(resourcesVal);
+    const target = s3Targets[resourceName];
+
+    if (!target) {
+      return yield* Effect.fail(
+        new ConnectorError({
+          connectorId: `s3_${resourceName}`,
+          message: `S3 target '${resourceName}' is not configured in secrets`,
+        }),
+      );
+    }
+
+    // 2. Build isolated layer exposing ONLY this resource's credentials
+    const scopedTargets = { [resourceName]: target };
+    const s3ConfigLayer = Layer.succeed(S3ResourcesConfig, {
+      s3: scopedTargets,
+      getS3Resource: (name: string) =>
+        name === resourceName ? Option.some(target) : Option.none(),
+    });
+
+    // 3. Compose live connector with HTTP client and scoped config
+    return S3ConnectorService.Live.pipe(
+      Layer.provide(s3ConfigLayer),
+      Layer.provide(FetchHttpClient.layer),
+    );
+  });
+```
 
 ### On-Demand Workers & Failure Isolation
 
@@ -488,6 +588,73 @@ export const KnowledgeAccessAgent = defineAgent({
 - **Topological Graph Traversal**: Breadth-First Search (BFS) neighborhood traversal up to $N$ hops with dynamic edge filtering and Bayesian confidence pruning.
 - **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` $\xrightarrow{\text{DEPENDS\_ON}}$ `wasm` $\xleftarrow{\text{COMPILES\_TO}}$ `typescript`).
 - **GraphRAG Question Answering (`/ask`)**: Fetches grounding chunks, discovers related entities and directed edges, structures the combined context, and invokes LLM synthesis with automatic citation generation.
+
+#### The GraphRAG Retrieval & Context Synthesis Pipeline
+
+Behind the `graphRag` and `ask` methods, [`src/pipeline/graphrag-service.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/graphrag-service.ts) orchestrates hybrid semantic retrieval, seed entity extraction, and multi-hop topological graph traversal into a single unified context:
+
+```typescript
+/**
+ * Hybrid GraphRAG context retrieval in Effect:
+ * Dense vector + full-text RRF search -> extract seed entities ->
+ * multi-hop topological graph traversal -> synthesize grounded prompt.
+ */
+const retrieveContext = (query: GraphRAGQuery) =>
+  Effect.gen(function* () {
+    const topK = query.topK ?? 5;
+    const maxHops = Math.max(1, Math.min(query.maxHops ?? 2, 5));
+    const minConfidence = query.minConfidence ?? 0.0;
+
+    // 1. Generate dense query embedding
+    const embedding = yield* embeddingService.generateEmbedding(query.query);
+
+    // 2. Hybrid search across document chunks (Vector Cosine + Full-Text RRF)
+    const relevantChunks = yield* chunkRepo.searchHybrid({
+      query: query.query,
+      embedding,
+      limit: topK,
+    });
+
+    // 3. Extract seed entities (chunk mentions + direct name matches)
+    const chunkIds = relevantChunks.map((c) => c.chunkId);
+    const chunkEntityIds = yield* chunkRepo.getEntityIdsForChunks(chunkIds);
+    const namedEntities = yield* entityRepo.searchByName(query.query, 5);
+    const seedEntityIds = Array.from(
+      new Set([...chunkEntityIds, ...namedEntities.map((e) => e.id)]),
+    );
+
+    // 4. Multi-hop topological graph traversal for relational context
+    let entities: ReadonlyArray<Entity> = [];
+    let relationships: ReadonlyArray<Edge> = [];
+    if (seedEntityIds.length > 0) {
+      const neighborhood = yield* graphRepo.getNeighborhood({
+        seedEntityIds,
+        depth: maxHops,
+        relationTypes: query.relationTypes,
+        minConfidence,
+        limit: 50,
+      });
+      relationships = neighborhood.edges;
+      entities = yield* entityRepo.findByIds(neighborhood.entityIds);
+    }
+
+    // 5. Synthesize grounded Markdown context prompt for LLM answer generation
+    const formattedPrompt = formatContextPrompt(
+      query.query,
+      relevantChunks,
+      entities,
+      relationships,
+    );
+
+    return {
+      query: query.query,
+      entities,
+      relationships,
+      relevantChunks,
+      formattedContextPrompt: formattedPrompt,
+    };
+  });
+```
 
 ---
 
