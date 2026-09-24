@@ -124,8 +124,13 @@ flowchart TD
    - **Entity & Relation Extraction**: The [`EntityExtractor`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/extractor.ts) applies linguistic rules, regex patterns, a curated technology dictionary, and stopword filters to identify candidate domain concepts (e.g., `Golem Cloud`, `PostgreSQL`, `pgvector`) and relations (e.g., `DEPENDS_ON`, `PART_OF`, `RELATES_TO`).
 4. **Entity Resolution & Bayesian Fusion**:
    Extracted terms often contain aliases (e.g., `postgres` vs. `PostgreSQL`). The [`EntityResolver`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/entity-resolver.ts) resolves synonyms to a canonical slug (`postgresql`), merges properties, and uses Bayesian confidence updating:
-   $$\text{Confidence}_{\text{new}} = 1 - (1 - \text{Confidence}_{\text{old}}) \times (1 - \text{Confidence}_{\text{match}})$$
+
+   $$
+   \text{Confidence}_{\text{new}} = 1 - (1 - \text{Confidence}_{\text{old}}) \times (1 - \text{Confidence}_{\text{match}})
+   $$
+
    Repeated mentions across documents strengthen confidence without unbounded growth.
+
 5. **Atomic Relational Persistence**:
    - Chunks and embeddings are stored in `chunks` with HNSW cosine indexing.
    - Entities and their aliases are stored in `entities` and `entity_aliases` (with trigram GIN indices for fuzzy lookup).
@@ -481,7 +486,7 @@ export const KnowledgeAccessAgent = defineAgent({
 
 - **Hybrid Search via Reciprocal Rank Fusion (RRF)**: Combines vector cosine similarity with PostgreSQL full-text search rankings using $RRF(d) = \sum \frac{1}{60 + \text{rank}(d)}$, delivering high recall for exact keywords alongside conceptual relevance.
 - **Topological Graph Traversal**: Breadth-First Search (BFS) neighborhood traversal up to $N$ hops with dynamic edge filtering and Bayesian confidence pruning.
-- **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` $\xrightarrow{\text{DEPENDS_ON}}$ `wasm` $\xleftarrow{\text{COMPILES_TO}}$ `typescript`).
+- **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` $\xrightarrow{\text{DEPENDS\_ON}}$ `wasm` $\xleftarrow{\text{COMPILES\_TO}}$ `typescript`).
 - **GraphRAG Question Answering (`/ask`)**: Fetches grounding chunks, discovers related entities and directed edges, structures the combined context, and invokes LLM synthesis with automatic citation generation.
 
 ---
