@@ -98,7 +98,7 @@ echo "  Log Level: ${RUST_LOG:-info}"
 print_status "Checking Golem server status..."
 
 if command -v golem &> /dev/null; then
-    if golem info &> /dev/null; then
+    if curl -sf http://localhost:9881/healthcheck &> /dev/null || golem component list &> /dev/null; then
         print_success "Golem server is running"
     else
         print_warning "Golem server may not be running"

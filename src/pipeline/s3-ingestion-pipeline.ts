@@ -42,10 +42,8 @@ export function runS3Ingestion(
     const startTime = Date.now();
     const force = options?.force ?? false;
 
-    const s3Service = yield* S3ConnectorService;
+    const connector = yield* S3ConnectorService;
     const checkpointRepo = yield* CheckpointRepository;
-
-    const connector = yield* s3Service.createConnector(resourceName);
 
     const existingCheckpoint = yield* checkpointRepo.getCheckpoint(
       `s3_${resourceName}`,

@@ -114,6 +114,22 @@ export const ResourcesConfigFields = {
 export const ResourcesConfigSchema = Schema.Struct(ResourcesConfigFields);
 export type ResourcesConfigSchema = typeof ResourcesConfigSchema.Type;
 
+/**
+ * Scoped service tag representing a single, specific S3 resource target configuration.
+ */
+export class S3ResourceConfig extends Context.Service<
+  S3ResourceConfig,
+  S3ResourceTarget
+>()("app/config/S3ResourceConfig") {}
+
+/**
+ * Scoped service tag representing a single, specific Web resource target configuration.
+ */
+export class WebResourceConfig extends Context.Service<
+  WebResourceConfig,
+  WebResourceTarget
+>()("app/config/WebResourceConfig") {}
+
 export interface S3ResourcesConfigShape {
   readonly s3: Record<string, S3ResourceTarget>;
   readonly getS3Resource: (name: string) => Option.Option<S3ResourceTarget>;

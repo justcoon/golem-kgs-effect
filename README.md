@@ -486,7 +486,7 @@ Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HT
 
 ### 1. Start Infrastructure
 
-Start PostgreSQL with pgvector, RustFS (S3 storage), and Ollama:
+Start PostgreSQL with pgvector, RustFS (S3 storage), Ollama, and the complete OpenTelemetry observability suite (OTel Collector, Jaeger, Prometheus, Grafana):
 
 ```bash
 docker compose up -d
@@ -512,6 +512,7 @@ LLM_API_BASE=http://127.0.0.1:11434/v1
 LLM_MODEL=qwen2.5:1.5b
 LLM_API_KEY=ollama
 LLM_USE_FOR_ASK=false
+OTLP_ENDPOINT=http://localhost:4318
 ```
 
 ### 3. Build and Deploy
@@ -550,7 +551,21 @@ The E2E test runner exercises the entire pipeline end-to-end across 7 test suite
 
 The Golem HTTP Gateway will be active on **`http://localhost:9006`**, and the Golem MCP Gateway will be active on **`http://localhost:9007/mcp`**.
 
-### 4. Start Frontend
+### 4. Observability & OpenTelemetry (Tracing & Metrics)
+
+The system includes native OpenTelemetry integration powered by Golem's built-in `golem-otlp-exporter` (version `1.5.0`) plugin in `golem.yaml`. It streams automatic invocation spans, database query operations (`sql.execute`), log correlations, and runtime metrics without requiring third-party Node.js SDKs in the WebAssembly component.
+
+| Service            | Protocol / Port           | Default URL                                      | Purpose                                                                    |
+| ------------------ | ------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------- |
+| **Jaeger UI**      | HTTP `16686`              | [http://localhost:16686](http://localhost:16686) | Distributed tracing waterfall, latency profiling, and database query spans |
+| **Prometheus**     | HTTP `9090`               | [http://localhost:9090](http://localhost:9090)   | Time-series metrics engine scraping Golem runtime counters and gauges      |
+| **Grafana**        | HTTP `3000`               | [http://localhost:3000](http://localhost:3000)   | Unified dashboards pre-provisioned with Jaeger & Prometheus datasources    |
+| **OTel Collector** | HTTP `4318` / gRPC `4317` | `http://localhost:4318`                          | Ingestion endpoint receiving OTLP signals from Golem                       |
+
+> [!NOTE]
+> **E2E Test Isolation:** When running `./run_e2e_test.sh`, the deployment activates the `test` preset (`pluginsMergeMode: replace`, `plugins: []`), ensuring that automated tests run in complete isolation with zero telemetry overhead or external collector dependencies.
+
+### 5. Start Frontend
 
 A Vue 3 + Vite visual explorer is available in [`frontend/`](./frontend/). For a visual walkthrough with screenshots, feature breakdowns, and frontend architecture details, see the [Frontend Documentation](./frontend/README.md).
 

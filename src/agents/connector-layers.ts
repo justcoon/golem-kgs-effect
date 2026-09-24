@@ -1,10 +1,10 @@
-import { Effect, Layer, Option, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import {
   parseS3Targets,
   parseWebTargets,
-  S3ResourcesConfig,
-  WebResourcesConfig,
+  S3ResourceConfig,
+  WebResourceConfig,
 } from "../config/schema.js";
 import type { AppAgentConfigService } from "../config/agent-config.js";
 import { S3ConnectorService } from "../connectors/s3-connector.js";
@@ -34,17 +34,9 @@ export const makeS3ConnectorLayer = (
       );
     }
 
-    const scopedTargets = { [resourceName]: target };
-    const s3ConfigLayer = Layer.succeed(S3ResourcesConfig, {
-      s3: scopedTargets,
-      getS3Resource: (name: string) =>
-        name === resourceName ? Option.some(target) : Option.none(),
-    });
-
-    const httpLayer = FetchHttpClient.layer;
     return S3ConnectorService.Live.pipe(
-      Layer.provide(s3ConfigLayer),
-      Layer.provide(httpLayer),
+      Layer.provide(Layer.succeed(S3ResourceConfig, target)),
+      Layer.provide(FetchHttpClient.layer),
     );
   });
 
@@ -69,16 +61,8 @@ export const makeWebConnectorLayer = (
       );
     }
 
-    const scopedTargets = { [resourceName]: target };
-    const webConfigLayer = Layer.succeed(WebResourcesConfig, {
-      web: scopedTargets,
-      getWebResource: (name: string) =>
-        name === resourceName ? Option.some(target) : Option.none(),
-    });
-
-    const httpLayer = FetchHttpClient.layer;
     return WebConnectorService.Live.pipe(
-      Layer.provide(webConfigLayer),
-      Layer.provide(httpLayer),
+      Layer.provide(Layer.succeed(WebResourceConfig, target)),
+      Layer.provide(FetchHttpClient.layer),
     );
   });

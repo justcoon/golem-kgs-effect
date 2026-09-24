@@ -13,7 +13,7 @@ import {
 import {
   type WebResourceTarget,
   type HttpHeader,
-  WebResourcesConfig,
+  WebResourceConfig,
 } from "../config/schema.js";
 import {
   type RawDocument,
@@ -1331,33 +1331,15 @@ export class WebPageConnector implements SourceConnector<
  */
 export class WebConnectorService extends Context.Service<
   WebConnectorService,
-  {
-    readonly createConnector: (
-      resourceName: string,
-    ) => Effect.Effect<WebPageConnector, ConnectorError>;
-  }
+  WebPageConnector
 >()("app/connectors/WebConnectorService") {
   static readonly Live = Layer.effect(
     WebConnectorService,
     Effect.gen(function* () {
-      const resourcesConfig = yield* WebResourcesConfig;
       const httpClient = yield* HttpClient.HttpClient;
+      const target = yield* WebResourceConfig;
 
-      return {
-        createConnector: (resourceName: string) =>
-          Effect.gen(function* () {
-            const targetOpt = resourcesConfig.getWebResource(resourceName);
-            if (Option.isNone(targetOpt)) {
-              return yield* Effect.fail(
-                new ConnectorError({
-                  connectorId: `web:${resourceName}`,
-                  message: `Web resource target '${resourceName}' is not configured in golem.yaml`,
-                }),
-              );
-            }
-            return yield* WebPageConnector.make(targetOpt.value, httpClient);
-          }),
-      };
+      return yield* WebPageConnector.make(target, httpClient);
     }),
   );
 }

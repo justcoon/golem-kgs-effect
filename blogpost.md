@@ -71,6 +71,7 @@ flowchart TD
 - **Dual Gateways**:
   - **HTTP Gateway (`:9006`)**: Direct REST API consumption for frontend apps and microservices.
   - **MCP Gateway (`:9007`)**: Streamable HTTP Model Context Protocol endpoint for direct connection to tools like Claude Desktop and Cursor.
+- **Native OpenTelemetry Observability**: Golem's built-in `golem-otlp-exporter` plugin exports distributed traces, database query spans, and runtime metrics without bundling bulky third-party SDKs into WebAssembly. Telemetry routes through an OpenTelemetry Collector into Jaeger (`:16686`), Prometheus (`:9090`), and Grafana (`:3000`).
 
 ---
 
@@ -123,13 +124,78 @@ flowchart TD
    - **Entity & Relation Extraction**: The [`EntityExtractor`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/extractor.ts) applies linguistic rules, regex patterns, a curated technology dictionary, and stopword filters to identify candidate domain concepts (e.g., `Golem Cloud`, `PostgreSQL`, `pgvector`) and relations (e.g., `DEPENDS_ON`, `PART_OF`, `RELATES_TO`).
 4. **Entity Resolution & Bayesian Fusion**:
    Extracted terms often contain aliases (e.g., `postgres` vs. `PostgreSQL`). The [`EntityResolver`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/entity-resolver.ts) resolves synonyms to a canonical slug (`postgresql`), merges properties, and uses Bayesian confidence updating:
-   $$\text{Confidence}_{\text{new}} = 1 - (1 - \text{Confidence}_{\text{old}}) \times (1 - \text{Confidence}_{\text{match}})$$
+
+   $$
+   \text{Confidence}_{\text{new}} = 1 - (1 - \text{Confidence}_{\text{old}}) \times (1 - \text{Confidence}_{\text{match}})
+   $$
+
    Repeated mentions across documents strengthen confidence without unbounded growth.
+
 5. **Atomic Relational Persistence**:
    - Chunks and embeddings are stored in `chunks` with HNSW cosine indexing.
    - Entities and their aliases are stored in `entities` and `entity_aliases` (with trigram GIN indices for fuzzy lookup).
    - Directed relations are stored in `edges` with compound primary key `(source_id, target_id, relation_type)`.
    - The provenance table `entity_chunks` links graph nodes back to their source chunks, allowing full traceability from graph traversal back to source citations.
+
+#### The Core Ingestion Pipeline in Effect
+
+Here is how these five stages compose cleanly into a single typed Effect pipeline inside [`src/pipeline/document-processor.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/document-processor.ts):
+
+```typescript
+/**
+ * Shared document indexing pipeline in Effect:
+ * Saves raw doc -> chunks hierarchically -> generates embeddings ->
+ * upserts chunks -> extracts & resolves entities -> persists provenance links.
+ */
+export function processAndIndexDocument(
+  document: RawDocument,
+): Effect.Effect<
+  void,
+  SqlError | EmbeddingError,
+  | DocumentRepository
+  | ChunkRepository
+  | EntityResolverService
+  | EmbeddingService
+  | ExtractionService
+> {
+  return Effect.gen(function* () {
+    const docRepo = yield* DocumentRepository;
+    const chunkRepo = yield* ChunkRepository;
+    const entityResolver = yield* EntityResolverService;
+    const embeddingService = yield* EmbeddingService;
+    const extractionService = yield* ExtractionService;
+
+    // 1. Ingress & deterministic document persistence
+    yield* docRepo.saveDocument(document);
+
+    // 2. Semantic hierarchical chunking
+    const chunkResult = yield* DocumentChunker.chunkDocument(document);
+    if (chunkResult.chunks.length === 0) return;
+
+    // 3. Batch dense vector embedding generation
+    const texts = chunkResult.chunks.map((c) => c.content);
+    const embeddings = yield* embeddingService.generateEmbeddings(texts);
+
+    // 4 & 5. Upsert chunks, extract entities/relations, and fuse into graph
+    for (let i = 0; i < chunkResult.chunks.length; i++) {
+      const chunk = chunkResult.chunks[i]!;
+      yield* chunkRepo.upsertChunk({ ...chunk, embedding: embeddings[i] });
+
+      const knowledge = yield* extractionService.extractFromChunk(chunk);
+      yield* entityResolver.fuseKnowledge(knowledge);
+
+      for (const entity of knowledge.entities) {
+        yield* chunkRepo.linkEntityChunk({
+          entityId: entity.id,
+          chunkId: chunk.id,
+          mentionText: entity.name,
+          confidence: Number(entity.metadata?.confidence ?? 1.0),
+        });
+      }
+    }
+  });
+}
+```
 
 ---
 
@@ -172,8 +238,49 @@ agentSecretDefaults:
 In standard microservice architectures, workers often load global credential bundles with access to all buckets and resources. In **golem-kgs-effect**, layer creation is strictly scoped per target resource via [`src/agents/connector-layers.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/connector-layers.ts):
 
 - **Strict Validation & Fail-Fast**: When `makeS3ConnectorLayer(config, resourceName)` or `makeWebConnectorLayer(config, resourceName)` is invoked, it validates that `resourceName` exists in secrets, immediately raising a typed `ConnectorError` during initialization if absent.
-- **Credential Isolation**: The resulting `S3ResourcesConfig` or `WebResourcesConfig` service provided to the worker fiber contains **only** the configuration for that specific resource. A worker ingesting the `legal` bucket has zero access to the `financial` or `engineering` credentials in the secret store.
+- **Credential Isolation**: The resulting `S3ResourceConfig` or `WebResourceConfig` service provided to the worker fiber contains **only** the configuration for that specific resource. A worker ingesting the `legal` bucket has zero access to the `financial` or `engineering` credentials in the secret store.
+- **Direct Service Resolution**: The connector instance is bound directly to the environment as `S3ConnectorService` / `WebConnectorService`, eliminating artificial factory getters (`createConnector`) and multi-tenant map lookups inside worker pipelines.
 - **Decoupled Architecture**: Pure connector layer factories are completely isolated from database drivers and native host bindings, allowing unit and integration tests to execute cleanly without external runtime dependencies.
+
+```typescript
+/**
+ * Builds an S3 connector layer scoped strictly to a specific resource target.
+ * Guarantees zero credential leakage across buckets and injects the connector directly.
+ */
+export const makeS3ConnectorLayer = (
+  config: AppAgentConfigService,
+  resourceName: string,
+) =>
+  Effect.gen(function* () {
+    // 1. Unpack redacted configuration from Golem secrets
+    const resourcesVal = Redacted.value(yield* config.resources.s3.get);
+    const s3Targets = parseS3Targets(resourcesVal);
+    const target = s3Targets[resourceName];
+
+    if (!target) {
+      return yield* Effect.fail(
+        new ConnectorError({
+          connectorId: `s3_${resourceName}`,
+          message: `S3 resource target '${resourceName}' is not configured in secrets`,
+        }),
+      );
+    }
+
+    // 2. Inject target directly into S3ConnectorService.Live
+    return S3ConnectorService.Live.pipe(
+      Layer.provide(Layer.succeed(S3ResourceConfig, target)),
+      Layer.provide(FetchHttpClient.layer),
+    );
+  });
+```
+
+Worker pipelines then resolve their designated connector with zero factory boilerplate:
+
+```typescript
+// Inside s3-ingestion-pipeline.ts — the connector IS the service
+const connector = yield * S3ConnectorService;
+const checkpointRepo = yield * CheckpointRepository;
+```
 
 ### On-Demand Workers & Failure Isolation
 
@@ -480,8 +587,75 @@ export const KnowledgeAccessAgent = defineAgent({
 
 - **Hybrid Search via Reciprocal Rank Fusion (RRF)**: Combines vector cosine similarity with PostgreSQL full-text search rankings using $RRF(d) = \sum \frac{1}{60 + \text{rank}(d)}$, delivering high recall for exact keywords alongside conceptual relevance.
 - **Topological Graph Traversal**: Breadth-First Search (BFS) neighborhood traversal up to $N$ hops with dynamic edge filtering and Bayesian confidence pruning.
-- **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` $\xrightarrow{\text{DEPENDS_ON}}$ `wasm` $\xleftarrow{\text{COMPILES_TO}}$ `typescript`).
+- **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` $\xrightarrow{\text{DEPENDS\_ON}}$ `wasm` $\xleftarrow{\text{COMPILES\_TO}}$ `typescript`).
 - **GraphRAG Question Answering (`/ask`)**: Fetches grounding chunks, discovers related entities and directed edges, structures the combined context, and invokes LLM synthesis with automatic citation generation.
+
+#### The GraphRAG Retrieval & Context Synthesis Pipeline
+
+Behind the `graphRag` and `ask` methods, [`src/pipeline/graphrag-service.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/pipeline/graphrag-service.ts) orchestrates hybrid semantic retrieval, seed entity extraction, and multi-hop topological graph traversal into a single unified context:
+
+```typescript
+/**
+ * Hybrid GraphRAG context retrieval in Effect:
+ * Dense vector + full-text RRF search -> extract seed entities ->
+ * multi-hop topological graph traversal -> synthesize grounded prompt.
+ */
+const retrieveContext = (query: GraphRAGQuery) =>
+  Effect.gen(function* () {
+    const topK = query.topK ?? 5;
+    const maxHops = Math.max(1, Math.min(query.maxHops ?? 2, 5));
+    const minConfidence = query.minConfidence ?? 0.0;
+
+    // 1. Generate dense query embedding
+    const embedding = yield* embeddingService.generateEmbedding(query.query);
+
+    // 2. Hybrid search across document chunks (Vector Cosine + Full-Text RRF)
+    const relevantChunks = yield* chunkRepo.searchHybrid({
+      query: query.query,
+      embedding,
+      limit: topK,
+    });
+
+    // 3. Extract seed entities (chunk mentions + direct name matches)
+    const chunkIds = relevantChunks.map((c) => c.chunkId);
+    const chunkEntityIds = yield* chunkRepo.getEntityIdsForChunks(chunkIds);
+    const namedEntities = yield* entityRepo.searchByName(query.query, 5);
+    const seedEntityIds = Array.from(
+      new Set([...chunkEntityIds, ...namedEntities.map((e) => e.id)]),
+    );
+
+    // 4. Multi-hop topological graph traversal for relational context
+    let entities: ReadonlyArray<Entity> = [];
+    let relationships: ReadonlyArray<Edge> = [];
+    if (seedEntityIds.length > 0) {
+      const neighborhood = yield* graphRepo.getNeighborhood({
+        seedEntityIds,
+        depth: maxHops,
+        relationTypes: query.relationTypes,
+        minConfidence,
+        limit: 50,
+      });
+      relationships = neighborhood.edges;
+      entities = yield* entityRepo.findByIds(neighborhood.entityIds);
+    }
+
+    // 5. Synthesize grounded Markdown context prompt for LLM answer generation
+    const formattedPrompt = formatContextPrompt(
+      query.query,
+      relevantChunks,
+      entities,
+      relationships,
+    );
+
+    return {
+      query: query.query,
+      entities,
+      relationships,
+      relevantChunks,
+      formattedContextPrompt: formattedPrompt,
+    };
+  });
+```
 
 ---
 
@@ -545,6 +719,14 @@ Writing distributed ETL pipelines in TypeScript is often plagued by silent error
 
 Pure vector search is a black box that often returns fragmented chunks lacking structural context. By merging vector embeddings with an explicit knowledge graph, **golem-kgs-effect** gives users and AI agents the best of both worlds: semantic discovery and verifiable, structured relational grounding.
 
+### 4. Zero-Overhead OpenTelemetry Observability
+
+Observability in WebAssembly is notoriously difficult when relying on traditional userland SDKs. With Golem's built-in `golem-otlp-exporter`, tracing happens natively at the host level:
+
+- Every agent invocation (`/api/knowledge/overview`, `/api/knowledge/search`, `/api/knowledge/ask`) produces a root trace span.
+- Every PostgreSQL operation (`sql.execute`) automatically records child spans with execution latencies.
+- Telemetry feeds directly into an OpenTelemetry Collector routing to **Jaeger** (`http://localhost:16686`), **Prometheus** (`http://localhost:9090`), and **Grafana** (`http://localhost:3000`) without adding a single line of Node.js telemetry code to the agent.
+
 ---
 
 ## Summary & Getting Started
@@ -558,7 +740,7 @@ To explore the code, deploy the agents, or run the frontend explorer locally:
 git clone https://github.com/justcoon/golem-kgs-effect.git
 cd golem-kgs-effect
 
-# 2. Start PostgreSQL, S3 (RustFS), and Ollama
+# 2. Start PostgreSQL, S3 (RustFS), Ollama, and the OpenTelemetry stack (Jaeger, Prometheus, Grafana)
 docker compose up -d
 
 # 3. Build and deploy Golem agents
@@ -572,4 +754,9 @@ npm install
 npm run dev
 ```
 
-Visit `http://localhost:5173` to explore your knowledge graph visually!
+- **Frontend Explorer**: `http://localhost:5173`
+- **Jaeger Traces UI**: `http://localhost:16686`
+- **Prometheus Metrics**: `http://localhost:9090`
+- **Grafana Dashboards**: `http://localhost:3000`
+- **REST Gateway**: `http://localhost:9006`
+- **MCP Gateway**: `http://localhost:9007/mcp`

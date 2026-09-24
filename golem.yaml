@@ -5,6 +5,7 @@ app: golem-kgs-effect
 environments:
   local:
     server: local
+    componentPresets: local
   test:
     server: local
     componentPresets: test
@@ -77,8 +78,20 @@ components:
   golem-kgs-effect:effect-main:
     dir: ""
     templates: effect
+    plugins:
+      - name: golem-otlp-exporter
+        version: "1.5.0"
+        parameters:
+          endpoint: "{{ OTLP_ENDPOINT }}"
+          signals: "traces,logs,metrics"
+          # Intended to export clean agent type names; normalized in otel-collector due to Golem bug
+          service-name-mode: "agent-type"
     presets:
+      local:
+        default: true
       test:
+        pluginsMergeMode: replace
+        plugins: []
         config:
           db:
             host: "{{ POSTGRES_HOST }}"
