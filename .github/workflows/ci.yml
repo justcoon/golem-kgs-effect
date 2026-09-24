@@ -158,6 +158,7 @@ jobs:
           LLM_API_BASE: http://localhost:11434/v1
           LLM_API_KEY: ollama
           LLM_USE_FOR_ASK: false
+          OTLP_ENDPOINT: http://localhost:4318
         run: golem deploy --reset --yes
       - name: Smoke test deployment
         run: |
