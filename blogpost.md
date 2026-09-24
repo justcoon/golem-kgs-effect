@@ -71,6 +71,7 @@ flowchart TD
 - **Dual Gateways**:
   - **HTTP Gateway (`:9006`)**: Direct REST API consumption for frontend apps and microservices.
   - **MCP Gateway (`:9007`)**: Streamable HTTP Model Context Protocol endpoint for direct connection to tools like Claude Desktop and Cursor.
+- **Native OpenTelemetry Observability**: Golem's built-in `golem-otlp-exporter` plugin exports distributed traces, database query spans, and runtime metrics without bundling bulky third-party SDKs into WebAssembly. Telemetry routes through an OpenTelemetry Collector into Jaeger (`:16686`), Prometheus (`:9090`), and Grafana (`:3000`).
 
 ---
 
@@ -545,6 +546,14 @@ Writing distributed ETL pipelines in TypeScript is often plagued by silent error
 
 Pure vector search is a black box that often returns fragmented chunks lacking structural context. By merging vector embeddings with an explicit knowledge graph, **golem-kgs-effect** gives users and AI agents the best of both worlds: semantic discovery and verifiable, structured relational grounding.
 
+### 4. Zero-Overhead OpenTelemetry Observability
+
+Observability in WebAssembly is notoriously difficult when relying on traditional userland SDKs. With Golem's built-in `golem-otlp-exporter`, tracing happens natively at the host level:
+
+- Every agent invocation (`/api/knowledge/overview`, `/api/knowledge/search`, `/api/knowledge/ask`) produces a root trace span.
+- Every PostgreSQL operation (`sql.execute`) automatically records child spans with execution latencies.
+- Telemetry feeds directly into an OpenTelemetry Collector routing to **Jaeger** (`http://localhost:16686`), **Prometheus** (`http://localhost:9090`), and **Grafana** (`http://localhost:3000`) without adding a single line of Node.js telemetry code to the agent.
+
 ---
 
 ## Summary & Getting Started
@@ -558,7 +567,7 @@ To explore the code, deploy the agents, or run the frontend explorer locally:
 git clone https://github.com/justcoon/golem-kgs-effect.git
 cd golem-kgs-effect
 
-# 2. Start PostgreSQL, S3 (RustFS), and Ollama
+# 2. Start PostgreSQL, S3 (RustFS), Ollama, and the OpenTelemetry stack (Jaeger, Prometheus, Grafana)
 docker compose up -d
 
 # 3. Build and deploy Golem agents
@@ -572,4 +581,9 @@ npm install
 npm run dev
 ```
 
-Visit `http://localhost:5173` to explore your knowledge graph visually!
+- **Frontend Explorer**: `http://localhost:5173`
+- **Jaeger Traces UI**: `http://localhost:16686`
+- **Prometheus Metrics**: `http://localhost:9090`
+- **Grafana Dashboards**: `http://localhost:3000`
+- **REST Gateway**: `http://localhost:9006`
+- **MCP Gateway**: `http://localhost:9007/mcp`
