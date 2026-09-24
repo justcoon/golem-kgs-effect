@@ -794,9 +794,10 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
         ),
         EmbeddingService.Mock,
         ExtractionService.Default,
-        Layer.succeed(WebConnectorService, {
-          createConnector: (_name: string) => Effect.succeed(mockWebConnector),
-        }),
+        Layer.succeed(
+          WebConnectorService,
+          mockWebConnector as unknown as WebPageConnector,
+        ),
       );
 
       const initialWebState: WebTaskState = {
@@ -1192,16 +1193,10 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       );
 
       const checkProgram = Effect.gen(function* () {
-        const s3Service = yield* S3ConnectorService;
-        const mainConn = yield* s3Service.createConnector("main");
+        const mainConn = yield* S3ConnectorService;
         assert.equal(mainConn.source, "s3");
         assert.equal(mainConn.id, "s3_golem-documents_us-east-1");
-
-        // "legal" was configured in global secrets, but must be inaccessible in the "main" layer
-        const legalExit = yield* Effect.exit(
-          s3Service.createConnector("legal"),
-        );
-        assert.ok(legalExit._tag === "Failure");
+        assert.equal(mainConn.target.name, "main");
       });
 
       await Effect.runPromise(checkProgram.pipe(Effect.provide(s3Layer)));
@@ -1225,15 +1220,10 @@ Docker containerizes the development environment for Ollama and PostgreSQL.
       );
 
       const checkProgram = Effect.gen(function* () {
-        const webService = yield* WebConnectorService;
-        const docsConn = yield* webService.createConnector("golem-docs");
+        const docsConn = yield* WebConnectorService;
         assert.equal(docsConn.source, "web");
         assert.equal(docsConn.id, "web:golem-docs");
-
-        const unknownExit = yield* Effect.exit(
-          webService.createConnector("other-web"),
-        );
-        assert.ok(unknownExit._tag === "Failure");
+        assert.equal(docsConn.target.name, "golem-docs");
       });
 
       await Effect.runPromise(checkProgram.pipe(Effect.provide(webLayer)));

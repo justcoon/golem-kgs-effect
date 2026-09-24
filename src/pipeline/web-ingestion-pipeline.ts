@@ -46,10 +46,8 @@ export function runWebIngestion(
     const startTime = Date.now();
     const force = options?.force ?? false;
 
-    const webService = yield* WebConnectorService;
+    const connector = yield* WebConnectorService;
     const checkpointRepo = yield* CheckpointRepository;
-
-    const connector = yield* webService.createConnector(resourceName);
 
     const existingCheckpoint = yield* checkpointRepo.getCheckpoint(
       `web_${resourceName}`,

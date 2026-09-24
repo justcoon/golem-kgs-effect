@@ -238,13 +238,14 @@ agentSecretDefaults:
 In standard microservice architectures, workers often load global credential bundles with access to all buckets and resources. In **golem-kgs-effect**, layer creation is strictly scoped per target resource via [`src/agents/connector-layers.ts`](https://github.com/justcoon/golem-kgs-effect/blob/main/src/agents/connector-layers.ts):
 
 - **Strict Validation & Fail-Fast**: When `makeS3ConnectorLayer(config, resourceName)` or `makeWebConnectorLayer(config, resourceName)` is invoked, it validates that `resourceName` exists in secrets, immediately raising a typed `ConnectorError` during initialization if absent.
-- **Credential Isolation**: The resulting `S3ResourcesConfig` or `WebResourcesConfig` service provided to the worker fiber contains **only** the configuration for that specific resource. A worker ingesting the `legal` bucket has zero access to the `financial` or `engineering` credentials in the secret store.
+- **Credential Isolation**: The resulting `S3ResourceConfig` or `WebResourceConfig` service provided to the worker fiber contains **only** the configuration for that specific resource. A worker ingesting the `legal` bucket has zero access to the `financial` or `engineering` credentials in the secret store.
+- **Direct Service Resolution**: The connector instance is bound directly to the environment as `S3ConnectorService` / `WebConnectorService`, eliminating artificial factory getters (`createConnector`) and multi-tenant map lookups inside worker pipelines.
 - **Decoupled Architecture**: Pure connector layer factories are completely isolated from database drivers and native host bindings, allowing unit and integration tests to execute cleanly without external runtime dependencies.
 
 ```typescript
 /**
  * Builds an S3 connector layer scoped strictly to a specific resource target.
- * Guarantees zero credential leakage across buckets.
+ * Guarantees zero credential leakage across buckets and injects the connector directly.
  */
 export const makeS3ConnectorLayer = (
   config: AppAgentConfigService,
@@ -260,25 +261,25 @@ export const makeS3ConnectorLayer = (
       return yield* Effect.fail(
         new ConnectorError({
           connectorId: `s3_${resourceName}`,
-          message: `S3 target '${resourceName}' is not configured in secrets`,
+          message: `S3 resource target '${resourceName}' is not configured in secrets`,
         }),
       );
     }
 
-    // 2. Build isolated layer exposing ONLY this resource's credentials
-    const scopedTargets = { [resourceName]: target };
-    const s3ConfigLayer = Layer.succeed(S3ResourcesConfig, {
-      s3: scopedTargets,
-      getS3Resource: (name: string) =>
-        name === resourceName ? Option.some(target) : Option.none(),
-    });
-
-    // 3. Compose live connector with HTTP client and scoped config
+    // 2. Inject target directly into S3ConnectorService.Live
     return S3ConnectorService.Live.pipe(
-      Layer.provide(s3ConfigLayer),
+      Layer.provide(Layer.succeed(S3ResourceConfig, target)),
       Layer.provide(FetchHttpClient.layer),
     );
   });
+```
+
+Worker pipelines then resolve their designated connector with zero factory boilerplate:
+
+```typescript
+// Inside s3-ingestion-pipeline.ts — the connector IS the service
+const connector = yield * S3ConnectorService;
+const checkpointRepo = yield * CheckpointRepository;
 ```
 
 ### On-Demand Workers & Failure Isolation

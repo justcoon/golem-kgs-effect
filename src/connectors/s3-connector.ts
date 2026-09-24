@@ -16,7 +16,7 @@ import {
   parseListBucketResultXml,
   signS3Request,
 } from "./s3-signer.js";
-import { type S3ResourceTarget, S3ResourcesConfig } from "../config/schema.js";
+import { type S3ResourceTarget, S3ResourceConfig } from "../config/schema.js";
 import {
   type RawDocument,
   type ProvenanceRecord,
@@ -85,6 +85,10 @@ export interface S3ConnectorInstance extends SourceConnector<
   S3CursorData,
   DiscoveredItem
 > {
+  readonly target: S3ResourceTarget;
+  readonly prefix?: string;
+  readonly prefixes?: ReadonlyArray<string>;
+  readonly supportedExtensions?: ReadonlyArray<string>;
   readonly discoverStream: (
     cursor: Option.Option<S3CursorData>,
   ) => Stream.Stream<DiscoveredItem, ConnectorError>;
@@ -399,56 +403,155 @@ export class S3Connector implements S3ConnectorInstance {
   }
 }
 
-export interface S3ConnectorServiceShape {
-  readonly createConnector: (
-    targetOrName: S3ResourceTarget | string,
-    prefixOrPrefixes?: string | ReadonlyArray<string>,
-  ) => Effect.Effect<S3ConnectorInstance, ConnectorError>;
-}
-
 export class S3ConnectorService extends Context.Service<
   S3ConnectorService,
-  S3ConnectorServiceShape
+  S3ConnectorInstance
 >()("app/connectors/S3ConnectorService") {
   static readonly Live = Layer.effect(
     S3ConnectorService,
     Effect.gen(function* () {
       const httpClient = yield* HttpClient.HttpClient;
-      const resourcesConfig = yield* S3ResourcesConfig;
+      const target = yield* S3ResourceConfig;
 
-      return {
-        createConnector: (
-          targetOrName: S3ResourceTarget | string,
-          prefixOrPrefixes?: string | ReadonlyArray<string>,
-        ) =>
-          Effect.gen(function* () {
-            let target: S3ResourceTarget;
-            if (typeof targetOrName === "string") {
-              const resOpt = resourcesConfig.getS3Resource(targetOrName);
-              if (Option.isNone(resOpt)) {
-                return yield* new ConnectorError({
-                  connectorId: `s3_${targetOrName}`,
-                  message: `S3 resource '${targetOrName}' not found in resources configuration`,
-                });
-              }
-              target = resOpt.value;
-            } else {
-              target = targetOrName;
-            }
-
-            const prefix =
-              typeof prefixOrPrefixes === "string"
-                ? prefixOrPrefixes
-                : undefined;
-            const prefixes = Array.isArray(prefixOrPrefixes)
-              ? prefixOrPrefixes
-              : undefined;
-
-            return new S3Connector({ target, prefix, prefixes }, httpClient);
-          }),
-      };
+      return new S3Connector({ target, prefixes: target.prefixes }, httpClient);
     }),
   );
+
+  static readonly makeMock = (
+    mockFiles: Record<
+      string,
+      {
+        readonly content: string;
+        readonly lastModified?: Date;
+        readonly etag?: string;
+      }
+    > = {},
+    resourceName: string = "main",
+    prefixes?: ReadonlyArray<string>,
+  ): S3ConnectorInstance => {
+    const scanPrefixes: ReadonlyArray<string> =
+      prefixes && prefixes.length > 0 ? prefixes : [""];
+
+    const mockDiscover = (cursor: Option.Option<S3CursorData>) =>
+      Effect.sync(() => {
+        const cursorVal = Option.getOrUndefined(cursor);
+        const lastSyncTime = cursorVal
+          ? new Date(cursorVal.lastSyncTimestamp).getTime()
+          : 0;
+        const processedKeys = cursorVal?.processedKeys ?? {};
+        const bucketName = resourceName;
+        const items: DiscoveredItem[] = [];
+
+        for (const [key, entry] of Object.entries(mockFiles)) {
+          const matchesPrefix =
+            scanPrefixes.length === 0 ||
+            scanPrefixes.some((p) => p.length === 0 || key.startsWith(p));
+          if (!matchesPrefix) {
+            continue;
+          }
+          const lm = entry.lastModified ?? new Date(0);
+          const etag = entry.etag ?? `mock_etag_${key}`;
+
+          if (
+            processedKeys[key] &&
+            processedKeys[key] === etag &&
+            lm.getTime() <= lastSyncTime
+          ) {
+            continue;
+          }
+
+          items.push({
+            id: key,
+            uri: `s3://${bucketName}/${key}`,
+            sizeBytes: Buffer.byteLength(entry.content, "utf8"),
+            eTag: etag,
+            lastModified: lm,
+            metadata: { bucket: bucketName, key },
+          });
+        }
+
+        return items;
+      });
+
+    return {
+      id: `mock_s3_${resourceName}`,
+      source: "s3",
+      target: {
+        name: resourceName,
+        endpoint: "http://localhost:9000",
+        region: "us-east-1",
+        bucket: resourceName,
+        accessKeyId: "mock_key",
+        secretAccessKey: "mock_secret",
+        prefixes: scanPrefixes,
+      },
+      prefix: "",
+      prefixes: scanPrefixes,
+      supportedExtensions: DEFAULT_SUPPORTED_EXTENSIONS,
+      connect: () => Effect.void,
+      discover: mockDiscover,
+      discoverStream: (cursor: Option.Option<S3CursorData>) =>
+        Stream.fromIterableEffect(mockDiscover(cursor)),
+      fetch: (item: DiscoveredItem) =>
+        Effect.gen(function* () {
+          const entry = mockFiles[item.id];
+          if (!entry) {
+            return yield* new ConnectorError({
+              connectorId: "mock_s3",
+              message: `Object '${item.id}' not found in mock S3 store`,
+            });
+          }
+
+          const title = extractTitle(entry.content, item.id);
+          const ext = getFileExtension(item.id);
+          const docId = generateDocumentUuid("s3", resourceName, item.id);
+
+          const document: RawDocument = {
+            id: docId,
+            title,
+            content: entry.content,
+            metadata: {
+              bucket: resourceName,
+              eTag: item.eTag,
+              sizeBytes: item.sizeBytes,
+              lastModified: item.lastModified.toISOString(),
+            },
+            tags: ["s3", resourceName, ext],
+            source: "s3",
+            resourceName,
+            sourceKey: item.id,
+            sizeBytes: Buffer.byteLength(entry.content, "utf8"),
+            createdAt: item.lastModified,
+            updatedAt: new Date(),
+          };
+
+          const provenance: ProvenanceRecord = {
+            source: "s3",
+            documentId: docId,
+            uri: item.uri,
+            timestamp: item.lastModified,
+            extractor: "S3Connector.Mock",
+            extractionConfidence: 1.0,
+          };
+
+          return { document, provenance };
+        }),
+      checkpoint: (
+        cursor: S3CursorData,
+        status?: SyncStatus,
+        metrics?: Record<string, unknown>,
+      ) => ({
+        connectorId: `mock_s3_${resourceName}`,
+        cursorData: {
+          lastSyncTimestamp: cursor.lastSyncTimestamp,
+          processedKeys: cursor.processedKeys,
+          continuationToken: cursor.continuationToken,
+        },
+        status: status ?? "IDLE",
+        metrics: metrics ?? {},
+      }),
+    };
+  };
 
   static readonly Mock = (
     mockFiles: Record<
@@ -459,159 +562,30 @@ export class S3ConnectorService extends Context.Service<
         readonly etag?: string;
       }
     > = {},
-    mockResources: Record<
-      string,
-      {
-        readonly prefixes?: ReadonlyArray<string>;
+    resourceNameOrConfig:
+      | string
+      | Record<string, { readonly prefixes?: ReadonlyArray<string> }> = "main",
+    prefixes?: ReadonlyArray<string>,
+  ) => {
+    let resName = "main";
+    let scanPrefixes = prefixes;
+
+    if (typeof resourceNameOrConfig === "string") {
+      resName = resourceNameOrConfig;
+    } else if (
+      typeof resourceNameOrConfig === "object" &&
+      resourceNameOrConfig !== null
+    ) {
+      const keys = Object.keys(resourceNameOrConfig);
+      if (keys.length > 0) {
+        resName = keys[0]!;
+        scanPrefixes = resourceNameOrConfig[resName]?.prefixes;
       }
-    > = {},
-  ) =>
-    Layer.succeed(S3ConnectorService, {
-      createConnector: (
-        targetOrName: S3ResourceTarget | string,
-        prefixOrPrefixes?: string | ReadonlyArray<string>,
-      ) => {
-        const resourceTarget =
-          typeof targetOrName === "string"
-            ? mockResources[targetOrName]
-            : targetOrName;
+    }
 
-        const scanPrefixes: ReadonlyArray<string> = Array.isArray(
-          prefixOrPrefixes,
-        )
-          ? prefixOrPrefixes
-          : typeof prefixOrPrefixes === "string" && prefixOrPrefixes.length > 0
-            ? [prefixOrPrefixes]
-            : resourceTarget?.prefixes && resourceTarget.prefixes.length > 0
-              ? resourceTarget.prefixes
-              : [""];
-
-        const mockDiscover = (cursor: Option.Option<S3CursorData>) =>
-          Effect.sync(() => {
-            const cursorVal = Option.getOrUndefined(cursor);
-            const lastSyncTime = cursorVal
-              ? new Date(cursorVal.lastSyncTimestamp).getTime()
-              : 0;
-            const processedKeys = cursorVal?.processedKeys ?? {};
-
-            const bucketName =
-              typeof targetOrName === "string"
-                ? targetOrName
-                : targetOrName.bucket;
-
-            const items: DiscoveredItem[] = [];
-
-            for (const [key, entry] of Object.entries(mockFiles)) {
-              const matchesPrefix =
-                scanPrefixes.length === 0 ||
-                scanPrefixes.some((p) => p.length === 0 || key.startsWith(p));
-              if (!matchesPrefix) {
-                continue;
-              }
-              const lm = entry.lastModified ?? new Date(0);
-              const etag = entry.etag ?? `mock_etag_${key}`;
-
-              if (
-                processedKeys[key] &&
-                processedKeys[key] === etag &&
-                lm.getTime() <= lastSyncTime
-              ) {
-                continue;
-              }
-
-              items.push({
-                id: key,
-                uri: `s3://${bucketName}/${key}`,
-                sizeBytes: Buffer.byteLength(entry.content, "utf8"),
-                eTag: etag,
-                lastModified: lm,
-                metadata: { bucket: bucketName, key },
-              });
-            }
-
-            return items;
-          });
-
-        return Effect.succeed({
-          id:
-            typeof targetOrName === "string"
-              ? `mock_s3_${targetOrName}`
-              : `mock_s3_${targetOrName.bucket}`,
-          source: "s3",
-          connect: () => Effect.void,
-          discover: mockDiscover,
-          discoverStream: (cursor: Option.Option<S3CursorData>) =>
-            Stream.fromIterableEffect(mockDiscover(cursor)),
-          fetch: (item: DiscoveredItem) =>
-            Effect.gen(function* () {
-              const entry = mockFiles[item.id];
-              if (!entry) {
-                return yield* new ConnectorError({
-                  connectorId: "mock_s3",
-                  message: `Object '${item.id}' not found in mock S3 store`,
-                });
-              }
-
-              const resourceName =
-                typeof targetOrName === "string"
-                  ? targetOrName
-                  : targetOrName.name;
-              const bucketName =
-                typeof targetOrName === "string"
-                  ? targetOrName
-                  : targetOrName.bucket;
-              const title = extractTitle(entry.content, item.id);
-              const ext = getFileExtension(item.id);
-              const docId = generateDocumentUuid("s3", resourceName, item.id);
-
-              const document: RawDocument = {
-                id: docId,
-                title,
-                content: entry.content,
-                metadata: {
-                  bucket: bucketName,
-                  eTag: item.eTag,
-                  sizeBytes: item.sizeBytes,
-                  lastModified: item.lastModified.toISOString(),
-                },
-                tags: ["s3", resourceName, ext],
-                source: "s3",
-                resourceName,
-                sourceKey: item.id,
-                sizeBytes: Buffer.byteLength(entry.content, "utf8"),
-                createdAt: item.lastModified,
-                updatedAt: new Date(),
-              };
-
-              const provenance: ProvenanceRecord = {
-                source: "s3",
-                documentId: docId,
-                uri: item.uri,
-                timestamp: item.lastModified,
-                extractor: "S3Connector.Mock",
-                extractionConfidence: 1.0,
-              };
-
-              return { document, provenance };
-            }),
-          checkpoint: (
-            cursor: S3CursorData,
-            status?: SyncStatus,
-            metrics?: Record<string, unknown>,
-          ) => ({
-            connectorId:
-              typeof targetOrName === "string"
-                ? `mock_s3_${targetOrName}`
-                : `mock_s3_${targetOrName.bucket}`,
-            cursorData: {
-              lastSyncTimestamp: cursor.lastSyncTimestamp,
-              processedKeys: cursor.processedKeys,
-              continuationToken: cursor.continuationToken,
-            },
-            status: status ?? "IDLE",
-            metrics: metrics ?? {},
-          }),
-        });
-      },
-    });
+    return Layer.succeed(
+      S3ConnectorService,
+      S3ConnectorService.makeMock(mockFiles, resName, scanPrefixes),
+    );
+  };
 }

@@ -217,8 +217,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
       };
 
       const testProgram = Effect.gen(function* () {
-        const service = yield* S3ConnectorService;
-        const connector = yield* service.createConnector("main");
+        const connector = yield* S3ConnectorService;
 
         // 1. Connect
         yield* connector.connect();
@@ -277,7 +276,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
           0,
           "Unchanged files should be skipped",
         );
-      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
+      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles, "main")));
 
       await Effect.runPromise(testProgram);
     });
@@ -292,8 +291,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
       };
 
       const testProgram = Effect.gen(function* () {
-        const service = yield* S3ConnectorService;
-        const connector = yield* service.createConnector("legal");
+        const connector = yield* S3ConnectorService;
 
         const oldCursor: S3CursorData = {
           lastSyncTimestamp: "2026-09-06T10:00:00.000Z",
@@ -309,7 +307,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
           "Modified file with new etag should be re-discovered",
         );
         assert.equal(discovered[0].eTag, "etag_overview_v2");
-      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
+      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles, "legal")));
 
       await Effect.runPromise(testProgram);
     });
@@ -324,16 +322,17 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
       };
 
       const testProgram = Effect.gen(function* () {
-        const service = yield* S3ConnectorService;
-
         // Resource 1: "marketing"
-        const connMarketing = yield* service.createConnector("marketing");
+        const connMarketing = S3ConnectorService.makeMock(
+          mockFiles,
+          "marketing",
+        );
         const discMarketing = yield* connMarketing.discover(Option.none());
         assert.equal(discMarketing.length, 1);
         const docMarketing = yield* connMarketing.fetch(discMarketing[0]);
 
         // Resource 2: "finance"
-        const connFinance = yield* service.createConnector("finance");
+        const connFinance = S3ConnectorService.makeMock(mockFiles, "finance");
         const discFinance = yield* connFinance.discover(Option.none());
         assert.equal(discFinance.length, 1);
         const docFinance = yield* connFinance.fetch(discFinance[0]);
@@ -353,7 +352,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
         // Determinism: Re-fetching for marketing yields identical UUID
         const docMarketingRepeat = yield* connMarketing.fetch(discMarketing[0]);
         assert.equal(docMarketing.document.id, docMarketingRepeat.document.id);
-      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
+      });
 
       await Effect.runPromise(testProgram);
     });
@@ -373,8 +372,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
       };
 
       const testProgram = Effect.gen(function* () {
-        const service = yield* S3ConnectorService;
-        const connector = yield* service.createConnector("main");
+        const connector = yield* S3ConnectorService;
 
         const streamItems = yield* Stream.runCollect(
           connector.discoverStream(Option.none()),
@@ -383,7 +381,7 @@ describe("Phase 3 Connectors & S3 Ingestion", () => {
         assert.equal(streamItems.length, 2);
         assert.equal(streamItems[0].id, "docs/a.md");
         assert.equal(streamItems[1].id, "docs/b.md");
-      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles)));
+      }).pipe(Effect.provide(S3ConnectorService.Mock(mockFiles, "main")));
 
       await Effect.runPromise(testProgram);
     });
