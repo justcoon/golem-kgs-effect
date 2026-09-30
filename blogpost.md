@@ -587,7 +587,7 @@ export const KnowledgeAccessAgent = defineAgent({
 
 - **Hybrid Search via Reciprocal Rank Fusion (RRF)**: Combines vector cosine similarity with PostgreSQL full-text search rankings using $RRF(d) = \sum \frac{1}{60 + \text{rank}(d)}$, delivering high recall for exact keywords alongside conceptual relevance.
 - **Topological Graph Traversal**: Breadth-First Search (BFS) neighborhood traversal up to $N$ hops with dynamic edge filtering and Bayesian confidence pruning.
-- **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` $\xrightarrow{\text{DEPENDS\_ON}}$ `wasm` $\xleftarrow{\text{COMPILES\_TO}}$ `typescript`).
+- **Relational Shortest Path Search**: Finds structural connections between disparate entities (e.g. `golem-cloud` ──(DEPENDS_ON)─▶ `wasm` ◀─(COMPILES_TO)── `typescript`).
 - **GraphRAG Question Answering (`/ask`)**: Fetches grounding chunks, discovers related entities and directed edges, structures the combined context, and invokes LLM synthesis with automatic citation generation.
 
 #### The GraphRAG Retrieval & Context Synthesis Pipeline
