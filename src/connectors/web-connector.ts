@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import { Context, Effect, Layer, Option, Stream } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import {
   ConnectorError,
   type DiscoveredItem,

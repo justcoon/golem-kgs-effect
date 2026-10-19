@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Option } from "effect";
-import { type SqlError } from "effect/unstable/sql/SqlError";
+import { type SqlError } from "../storage/index.js";
 import {
   type CreateEntityInput,
   type Entity,

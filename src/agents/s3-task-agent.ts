@@ -30,17 +30,17 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
     "Durable S3 ingestion task worker bound 1:1 to an S3 resource target",
   mode: "durable",
   config: AppAgentConfig,
-  constructorParams: {
+  id: {
     resourceName: Schema.String,
   },
   http: Http.mount("/api/ingestion/s3/{resourceName}", { cors: ["*"] }),
-  snapshot: Snapshot.define({
+  snapshotting: Snapshot.define({
     schema: S3TaskStateSchema,
     policy: Snapshot.policy.everyN(5),
   }),
   methods: {
     sync: method({
-      params: {
+      input: {
         force: Schema.optional(Schema.Boolean),
       },
       success: S3TaskStatusResponseSchema,
@@ -49,20 +49,20 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
       http: [Http.post("/sync")],
     }),
     getStatus: method({
-      params: {},
+      input: {},
       success: S3TaskStatusResponseSchema,
       description: "Returns the current synchronization state and metrics",
       http: [Http.get("/status")],
     }),
     resetCursor: method({
-      params: {},
+      input: {},
       success: S3TaskStatusResponseSchema,
       description:
         "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
     }),
     startSchedule: method({
-      params: {
+      input: {
         intervalSeconds: Schema.Number,
       },
       success: S3TaskStatusResponseSchema,
@@ -70,13 +70,13 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
       http: [Http.post("/schedule/start")],
     }),
     stopSchedule: method({
-      params: {},
+      input: {},
       success: S3TaskStatusResponseSchema,
       description: "Stops recurring synchronization for this S3 resource",
       http: [Http.post("/schedule/stop")],
     }),
     scheduledTick: method({
-      params: {},
+      input: {},
       success: Schema.Boolean,
       description:
         "Called by Golem host timer to execute scheduled sync and schedule next cycle",
@@ -84,41 +84,43 @@ export const S3IngestorTaskAgentDefinition = defineAgent({
   },
 });
 
-export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
-  ({ resourceName }, snapshot) =>
+export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement<
+  Ref.Ref<S3TaskState>
+>({
+  init: ({ resourceName }) =>
+    Ref.make<S3TaskState>({
+      resourceName,
+      status: "IDLE",
+      lastSyncTimestamp: null,
+      cursor: null,
+      metrics: {
+        totalDiscovered: 0,
+        totalSynced: 0,
+        totalFailed: 0,
+        lastDurationMs: 0,
+      },
+      errorMessage: null,
+      scheduleRunning: false,
+      scheduleIntervalSeconds: null,
+      lastScheduledAt: null,
+    }),
+
+  methods: (state) =>
     Effect.gen(function* () {
+      const { resourceName } = yield* Ref.get(state);
       const config = yield* AppAgentConfig;
       const pipelineLayer = yield* makeS3TaskAgentLayer(config, resourceName);
 
-      const state = yield* snapshot.init({
-        resourceName,
-        status: "IDLE",
-        lastSyncTimestamp: null,
-        cursor: null,
-        metrics: {
-          totalDiscovered: 0,
-          totalSynced: 0,
-          totalFailed: 0,
-          lastDurationMs: 0,
-        },
-        errorMessage: null,
-        scheduleRunning: false,
-        scheduleIntervalSeconds: null,
-        lastScheduledAt: null,
-      });
-
-      yield* Effect.logInfo("S3IngestorTaskAgent initialized").pipe(
-        Effect.annotateLogs({ resourceName }),
-      );
-
       const scheduleNext = (intervalSeconds: number) =>
-        Effect.gen(function* () {
-          const scheduledAt = calculateScheduledAt(intervalSeconds);
-          const self = yield* S3IngestorTaskAgentDefinition.client.get({
-            resourceName,
-          });
-          yield* self.scheduledTick.schedule(scheduledAt, {});
-        });
+        Effect.scoped(
+          Effect.gen(function* () {
+            const scheduledAt = calculateScheduledAt(intervalSeconds);
+            const self = yield* S3IngestorTaskAgentDefinition.client.get({
+              resourceName,
+            });
+            yield* self.scheduledTick.schedule(scheduledAt, {});
+          }).pipe(Effect.orDie),
+        );
 
       const doSync = (force?: boolean) =>
         Effect.gen(function* () {
@@ -132,7 +134,7 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
 
           const result = yield* runS3Ingestion(resourceName, currentState, {
             force,
-          }).pipe(Effect.provide(pipelineLayer));
+          }).pipe(Effect.provide(pipelineLayer), Effect.orDie);
 
           const updated = yield* Ref.updateAndGet(state, (s) => ({
             ...s,
@@ -154,6 +156,7 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
           Effect.gen(function* () {
             const checkpointRepo = yield* CheckpointRepository.pipe(
               Effect.provide(pipelineLayer),
+              Effect.orDie,
             );
             yield* checkpointRepo
               .deleteCheckpoint(`s3_${resourceName}`)
@@ -217,4 +220,6 @@ export const S3IngestorTaskAgent = S3IngestorTaskAgentDefinition.implement(
           }).pipe(Effect.orDie),
       };
     }),
-);
+
+  snapshot: Snapshot.ref<S3TaskState>(),
+});

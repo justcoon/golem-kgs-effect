@@ -12,9 +12,9 @@
     "test:e2e": "tsx --test test/e2e/full-pipeline.e2e.test.ts"
   },
   "dependencies": {
-    "@effect/ai-openai": "4.0.0-beta.98",
-    "@golemcloud/effect-golem": "1.5.1",
-    "effect": "4.0.0-beta.98",
+    "@effect/ai-openai": "4.0.0",
+    "@golemcloud/effect-golem": "2.0.0",
+    "effect": "4.0.0",
     "node-html-markdown": "^2.0.0"
   },
   "devDependencies": {

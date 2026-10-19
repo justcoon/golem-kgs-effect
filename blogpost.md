@@ -80,36 +80,44 @@ flowchart TD
 The ingestion pipeline converts unstructured Markdown files and web pages into an interconnected, queryable knowledge base through a 5-stage ETL process:
 
 ```mermaid
-flowchart TD
-    subgraph Ingress["1. Ingress & Identity"]
-        S3["S3 Object Storage"] -->|"Fetch Markdown"| RawDoc["Raw Document<br/>(RFC 4122 UUID v5 Identity)"]
-        Web["Web / Sitemaps"] -->|"Fetch HTML & Convert"| RawDoc
-        RawDoc -->|"Save Record"| DocDB[("PostgreSQL: documents table<br/>(FK Anchor for Chunks)")]
+flowchart LR
+    subgraph S1["1. Ingress & Identity"]
+        direction TB
+        Sources["S3 / Web Sources"]
+        RawDoc["Raw Document<br/>(RFC 4122 UUID v5)"]
+        DocDB[("PostgreSQL: documents<br/>(FK Anchor for Chunks)")]
+        Sources --> RawDoc
+        RawDoc -->|"1. Persist"| DocDB
     end
 
-    subgraph Chunking["2. Semantic Chunking"]
-        RawDoc -->|"Hierarchical Markdown Splitter"| Chunker["Document Chunker<br/>(Preserves Breadcrumb Hierarchy)"]
-        Chunker -->|"Generates Array"| Chunks["DocumentChunk[]"]
+    subgraph S2["2. Semantic Chunking"]
+        direction TB
+        Chunker["Document Chunker<br/>(Preserves Breadcrumbs)"]
+        Chunks["DocumentChunk[]"]
+        Chunker --> Chunks
     end
 
-    subgraph Processing["3. Parallel Processing"]
-        Chunks -->|"Batch Texts"| EmbService["Embedding Model<br/>(nomic-embed-text)"]
-        EmbService -->|"768-dim Vectors"| Vectors["Vector Embeddings"]
-
-        Chunks -->|"Rule & Linguistic Parsing"| Extractor["Entity & Relation Extractor<br/>(Tech Dictionary & Patterns)"]
-        Extractor -->|"Candidate Triples"| Triples["Candidate Entities & Relations"]
+    subgraph S3["3. Vector Persistence"]
+        direction TB
+        Emb["Embedding Model<br/>(nomic-embed-text)"]
+        ChunkVec["Chunk + Vector"]
+        ChunkDB[("PostgreSQL: chunks<br/>(pgvector HNSW + GIN)")]
+        Emb --> ChunkVec
+        ChunkVec -->|"2. Upsert"| ChunkDB
     end
 
-    subgraph Resolution["4. Resolution & Fusion"]
-        Triples --> Fusion["Entity Resolution & Fusion<br/>(Alias Normalization & Bayesian Confidence)"]
-        Fusion --> CanonicalGraph["Canonical Entities & Directed Edges"]
+    subgraph S4["4. Graph Persistence"]
+        direction TB
+        Extract["Entity Extractor<br/>& Bayesian Fusion"]
+        Graph["Entities & Relations"]
+        GraphDB[("PostgreSQL: entities, aliases,<br/>edges & entity_chunks")]
+        Extract --> Graph
+        Graph -->|"3. Persist"| GraphDB
     end
 
-    subgraph Persistence["5. Storage Persistence"]
-        Chunks --> ChunkDB[("PostgreSQL: chunks table<br/>(pgvector HNSW + GIN Index)")]
-        Vectors --> ChunkDB
-        CanonicalGraph --> GraphDB[("PostgreSQL: entities, aliases & edges tables<br/>(Strict Foreign Keys)")]
-    end
+    S1 -->|"Raw Doc"| S2
+    S2 -->|"Chunks"| S3
+    S3 -->|"Extracted Triples"| S4
 ```
 
 ### Deep Dive into the 5 Pipeline Stages

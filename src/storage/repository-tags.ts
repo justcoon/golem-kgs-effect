@@ -1,6 +1,7 @@
 import { Context, type Effect, type Layer, type Option } from "effect";
-import { type SqlClient } from "effect/unstable/sql";
-import { type SqlError } from "effect/unstable/sql/SqlError";
+import { type SqlClient, SqlError } from "effect/sql";
+
+export type SqlError = SqlError.SqlError;
 import {
   type RawDocument,
   type DocumentSummary,

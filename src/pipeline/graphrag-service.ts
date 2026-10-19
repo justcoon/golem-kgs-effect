@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from "effect";
-import { type SqlError } from "effect/unstable/sql/SqlError";
+import { type SqlError } from "../storage/repository-tags.js";
 import { EmbeddingService, type EmbeddingError } from "./embedding-service.js";
 import {
   ChunkRepository,

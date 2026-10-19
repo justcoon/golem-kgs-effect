@@ -1,9 +1,5 @@
 import { Context, Data, Effect, Layer, Redacted, Schema } from "effect";
-import {
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { VectorEmbedding } from "../domain/chunk.js";
 import { EmbeddingConfigValues } from "../config/schema.js";
 
