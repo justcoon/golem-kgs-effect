@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { type SqlError } from "effect/unstable/sql/SqlError";
+import { type SqlError } from "../storage/index.js";
 import { type RawDocument } from "../domain/provenance.js";
 import { DocumentChunker } from "./chunker.js";
 import { EmbeddingService, type EmbeddingError } from "./embedding-service.js";

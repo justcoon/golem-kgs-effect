@@ -109,11 +109,11 @@ export const KnowledgeAccessAgent = defineAgent({
     "Query and explore the knowledge graph, retrieve documents, execute GraphRAG, and answer questions",
   mode: "ephemeral",
   config: AppAgentConfig,
-  constructorParams: {},
+  id: {},
   http: Http.mount("/api/knowledge", { cors: ["*"] }),
   methods: {
     search: method({
-      params: {
+      input: {
         query: Schema.String,
         limit: Schema.optional(Schema.Number),
         searchType: Schema.optional(
@@ -128,7 +128,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/search")],
     }),
     searchEntities: method({
-      params: {
+      input: {
         query: Schema.optional(Schema.String),
         limit: Schema.optional(Schema.Number),
       },
@@ -139,7 +139,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/entities/search")],
     }),
     getTopEntities: method({
-      params: {
+      input: {
         limit: Schema.optional(Schema.Number),
       },
       success: EntitySearchResponseSchema,
@@ -150,7 +150,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/entities/top")],
     }),
     getNeighborhood: method({
-      params: {
+      input: {
         entityId: Schema.String,
         maxDepth: Schema.optional(Schema.Number),
         relationTypes: Schema.optional(Schema.Array(Schema.String)),
@@ -164,7 +164,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/neighborhood")],
     }),
     getEntity: method({
-      params: {
+      input: {
         id: Schema.String,
       },
       success: Schema.NullOr(EntityResultSchema),
@@ -173,7 +173,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.get("/entities/{id}")],
     }),
     getEntityDocuments: method({
-      params: {
+      input: {
         id: Schema.String,
       },
       success: Schema.Array(DocumentSummarySchema),
@@ -183,7 +183,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.get("/entities/{id}/documents")],
     }),
     getDocument: method({
-      params: {
+      input: {
         id: Schema.String,
       },
       success: Schema.NullOr(DocumentResultSchema),
@@ -192,7 +192,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.get("/documents/{id}")],
     }),
     graphRag: method({
-      params: {
+      input: {
         query: Schema.String,
         topK: Schema.optional(Schema.Number),
         maxHops: Schema.optional(Schema.Number),
@@ -207,7 +207,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/graphrag")],
     }),
     findPaths: method({
-      params: {
+      input: {
         sourceEntityId: Schema.String,
         targetEntityId: Schema.String,
         maxDepth: Schema.optional(Schema.Number),
@@ -224,7 +224,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/paths")],
     }),
     ask: method({
-      params: {
+      input: {
         query: Schema.String,
         topK: Schema.optional(Schema.Number),
         maxHops: Schema.optional(Schema.Number),
@@ -238,7 +238,7 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.post("/ask")],
     }),
     getOverview: method({
-      params: {},
+      input: {},
       success: KnowledgeBaseOverviewSchema,
       promptHint:
         "Retrieve knowledge base overview statistics including counts of documents, chunks, entities, and relations",
@@ -247,347 +247,348 @@ export const KnowledgeAccessAgent = defineAgent({
       http: [Http.get("/overview")],
     }),
   },
-}).implement(() =>
-  Effect.gen(function* () {
-    const config = yield* AppAgentConfig;
-    const pipelineLayer = yield* makeAccessAgentLayer(config);
+}).implement({
+  init: () =>
+    Effect.gen(function* () {
+      const config = yield* AppAgentConfig;
+      const pipelineLayer = yield* makeAccessAgentLayer(config);
+      return { config, pipelineLayer };
+    }),
+  methods: ({ config, pipelineLayer }) => ({
+    search: ({ query, limit = 10, searchType = "hybrid" }) =>
+      Effect.gen(function* () {
+        const chunkRepo = yield* ChunkRepository;
+        const embeddingService = yield* EmbeddingService;
 
-    return {
-      search: ({ query, limit = 10, searchType = "hybrid" }) =>
-        Effect.gen(function* () {
-          const chunkRepo = yield* ChunkRepository;
-          const embeddingService = yield* EmbeddingService;
+        let items: ReadonlyArray<SearchResultItem> = [];
 
-          let items: ReadonlyArray<SearchResultItem> = [];
-
-          if (searchType === "vector") {
-            const emb = yield* embeddingService.generateEmbedding(query);
-            const res = yield* chunkRepo.searchVector({
-              embedding: emb,
-              topK: limit,
-            });
-            items = res;
-          } else if (searchType === "keyword") {
-            const res = yield* chunkRepo.searchKeyword({ query, limit });
-            items = res;
-          } else {
-            // Default: hybrid search
-            const emb = yield* embeddingService.generateEmbedding(query);
-            const res = yield* chunkRepo.searchHybrid({
-              query,
-              embedding: emb,
-              limit,
-            });
-            items = res;
-          }
-
-          return {
-            results: Array.from(items),
-            totalResults: items.length,
+        if (searchType === "vector") {
+          const emb = yield* embeddingService.generateEmbedding(query);
+          const res = yield* chunkRepo.searchVector({
+            embedding: emb,
+            topK: limit,
+          });
+          items = res;
+        } else if (searchType === "keyword") {
+          const res = yield* chunkRepo.searchKeyword({ query, limit });
+          items = res;
+        } else {
+          // Default: hybrid search
+          const emb = yield* embeddingService.generateEmbedding(query);
+          const res = yield* chunkRepo.searchHybrid({
             query,
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
-
-      searchEntities: ({ query, limit = 10 }) =>
-        Effect.gen(function* () {
-          const entityRepo = yield* EntityRepository;
-          const trimmed = (query ?? "").trim();
-          const matched =
-            trimmed.length === 0
-              ? yield* entityRepo.getTopConnected(limit)
-              : yield* entityRepo.searchByName(trimmed, limit);
-          const entities = matched.map(mapEntityToResult);
-
-          return {
-            entities,
-            total: entities.length,
-            query: trimmed,
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
-
-      getTopEntities: ({ limit = 10 }) =>
-        Effect.gen(function* () {
-          const entityRepo = yield* EntityRepository;
-          const matched = yield* entityRepo.getTopConnected(limit);
-          const entities = matched.map(mapEntityToResult);
-
-          return {
-            entities,
-            total: entities.length,
-            query: "",
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
-
-      getNeighborhood: ({ entityId, maxDepth, relationTypes, minConfidence }) =>
-        Effect.gen(function* () {
-          const entityRepo = yield* EntityRepository;
-          const graphRepo = yield* GraphRepository;
-
-          const resolvedId = yield* resolveEntityId(entityId, entityRepo);
-
-          const result = yield* graphRepo.getNeighborhood({
-            seedEntityIds: [resolvedId],
-            depth: maxDepth ?? 1,
-            relationTypes,
-            minConfidence: minConfidence ?? 0.0,
+            embedding: emb,
+            limit,
           });
+          items = res;
+        }
 
-          const entities = yield* fetchEntitiesByIds(
-            result.entityIds,
-            entityRepo,
-          );
+        return {
+          results: Array.from(items),
+          totalResults: items.length,
+          query,
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-          return {
-            entities: Array.from(entities),
-            edges: result.edges.map((e) => ({
-              sourceId: e.sourceId,
-              targetId: e.targetId,
-              relationType: e.relationType,
-              weight: e.weight,
-              confidence: e.confidence,
-              properties: e.properties,
-            })),
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+    searchEntities: ({ query, limit = 10 }) =>
+      Effect.gen(function* () {
+        const entityRepo = yield* EntityRepository;
+        const trimmed = (query ?? "").trim();
+        const matched =
+          trimmed.length === 0
+            ? yield* entityRepo.getTopConnected(limit)
+            : yield* entityRepo.searchByName(trimmed, limit);
+        const entities = matched.map(mapEntityToResult);
 
-      getEntity: ({ id }) =>
-        Effect.gen(function* () {
-          const entityRepo = yield* EntityRepository;
-          const opt = yield* entityRepo.findById(id);
-          return opt.pipe(Option.map(mapEntityToResult), Option.getOrNull);
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+        return {
+          entities,
+          total: entities.length,
+          query: trimmed,
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-      getEntityDocuments: ({ id }) =>
-        Effect.gen(function* () {
-          const entityRepo = yield* EntityRepository;
-          const resolvedId = yield* resolveEntityId(id, entityRepo);
-          const docs = yield* entityRepo.getRelatedDocuments(resolvedId);
-          return docs.map((doc) => ({
-            id: doc.id,
-            title: doc.title,
-            source: doc.source,
-            resourceName: doc.resourceName,
-            sourceKey: doc.sourceKey,
-            sizeBytes: doc.sizeBytes,
-            createdAt: new Date(doc.createdAt).toISOString(),
-            updatedAt: new Date(doc.updatedAt).toISOString(),
-          }));
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+    getTopEntities: ({ limit = 10 }) =>
+      Effect.gen(function* () {
+        const entityRepo = yield* EntityRepository;
+        const matched = yield* entityRepo.getTopConnected(limit);
+        const entities = matched.map(mapEntityToResult);
 
-      getDocument: ({ id }) =>
-        Effect.gen(function* () {
-          const docRepo = yield* DocumentRepository;
-          const opt = yield* docRepo.findDocumentById(id);
-          return opt.pipe(Option.map(mapDocumentToResult), Option.getOrNull);
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+        return {
+          entities,
+          total: entities.length,
+          query: "",
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-      graphRag: (query) =>
-        Effect.gen(function* () {
-          const service = yield* GraphRAGService;
-          const bundle = yield* service.retrieveContext({
-            query: query.query,
-            topK: query.topK,
-            maxHops: query.maxHops,
-            minConfidence: query.minConfidence,
-            relationTypes: query.relationTypes,
-          });
+    getNeighborhood: ({ entityId, maxDepth, relationTypes, minConfidence }) =>
+      Effect.gen(function* () {
+        const entityRepo = yield* EntityRepository;
+        const graphRepo = yield* GraphRepository;
 
-          return {
-            query: bundle.query,
-            entities: bundle.entities.map(mapEntityToResult),
-            relationships: bundle.relationships.map((e) => ({
-              sourceId: e.sourceId,
-              targetId: e.targetId,
-              relationType: e.relationType,
-              weight: e.weight,
-              confidence: e.confidence,
-              properties: e.properties,
-            })),
-            relevantChunks: bundle.relevantChunks.map((c) => ({
-              chunkId: c.chunkId,
-              documentId: c.documentId,
-              content: c.content,
-              score: c.score,
-              metadata: c.metadata,
-            })),
-            formattedContextPrompt: bundle.formattedContextPrompt,
-            metadata: bundle.metadata,
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+        const resolvedId = yield* resolveEntityId(entityId, entityRepo);
 
-      findPaths: (query) =>
-        Effect.gen(function* () {
-          const entityRepo = yield* EntityRepository;
-          const graphRepo = yield* GraphRepository;
+        const result = yield* graphRepo.getNeighborhood({
+          seedEntityIds: [resolvedId],
+          depth: maxDepth ?? 1,
+          relationTypes,
+          minConfidence: minConfidence ?? 0.0,
+        });
 
-          const resolvedSourceId = yield* resolveEntityId(
-            query.sourceEntityId,
-            entityRepo,
-          );
-          const resolvedTargetId = yield* resolveEntityId(
-            query.targetEntityId,
-            entityRepo,
-          );
+        const entities = yield* fetchEntitiesByIds(
+          result.entityIds,
+          entityRepo,
+        );
 
-          const result = yield* graphRepo.findPaths({
-            sourceEntityId: resolvedSourceId,
-            targetEntityId: resolvedTargetId,
-            maxDepth: query.maxDepth,
-            relationTypes: query.relationTypes,
-            direction: query.direction,
-          });
-
-          const allEntityIds = Array.from(
-            new Set(result.paths.flatMap((p) => Array.from(p.entityIds))),
-          );
-          const entities = yield* fetchEntitiesByIds(allEntityIds, entityRepo);
-
-          return {
-            paths: result.paths.map((p) => ({
-              entityIds: Array.from(p.entityIds),
-              edges: p.edges.map((e) => ({
-                sourceId: e.sourceId,
-                targetId: e.targetId,
-                relationType: e.relationType,
-                weight: e.weight,
-                confidence: e.confidence,
-                properties: e.properties,
-              })),
-              totalWeight: p.totalWeight,
-            })),
-            entities: Array.from(entities),
-            shortestPathLength: result.shortestPathLength,
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
-
-      ask: ({ query, topK = 5, maxHops = 2, generateAnswer = false }) =>
-        Effect.gen(function* () {
-          const graphRagService = yield* GraphRAGService;
-          const bundle = yield* graphRagService.retrieveContext({
-            query,
-            topK,
-            maxHops,
-          });
-
-          const citations: Citation[] = bundle.relevantChunks.map((chunk) => {
-            const meta = chunk.metadata ?? {};
-
-            const sourceUri =
-              typeof meta.sourceUri === "string"
-                ? meta.sourceUri
-                : `doc://${chunk.documentId}`;
-
-            const title =
-              typeof meta.title === "string"
-                ? meta.title
-                : `Document ${chunk.documentId}`;
-
-            const excerpt =
-              chunk.content.length > 250
-                ? `${chunk.content.slice(0, 247)}...`
-                : chunk.content;
-
-            return {
-              documentId: chunk.documentId,
-              chunkId: chunk.chunkId,
-              sourceUri,
-              title,
-              excerpt,
-            };
-          });
-
-          const groundedEntities = bundle.entities.map(mapEntityToResult);
-
-          const groundedRelationships = bundle.relationships.map((e) => ({
+        return {
+          entities: Array.from(entities),
+          edges: result.edges.map((e) => ({
             sourceId: e.sourceId,
             targetId: e.targetId,
             relationType: e.relationType,
             weight: e.weight,
             confidence: e.confidence,
             properties: e.properties,
-          }));
+          })),
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-          let answer = "";
-          if (generateAnswer) {
-            const useForAskSecret = yield* config.llm.useForAsk.get;
-            const useForAsk = parseBooleanSecret(useForAskSecret, false);
+    getEntity: ({ id }) =>
+      Effect.gen(function* () {
+        const entityRepo = yield* EntityRepository;
+        const opt = yield* entityRepo.findById(id);
+        return opt.pipe(Option.map(mapEntityToResult), Option.getOrNull);
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-            if (useForAsk) {
-              const maybeLlmService =
-                yield* Effect.serviceOption(LlmSynthesisService);
-              if (Option.isSome(maybeLlmService)) {
-                answer = yield* maybeLlmService.value
-                  .synthesizeAnswer(query, bundle)
-                  .pipe(
-                    Effect.catchTag("LlmSynthesisError", (err) =>
-                      Effect.logWarning(
-                        `LLM synthesis failed, falling back to deterministic answer: ${err.message}`,
-                      ).pipe(Effect.as(synthesizeAnswerText(query, bundle))),
-                    ),
-                  );
-              } else {
-                answer = synthesizeAnswerText(query, bundle);
-              }
+    getEntityDocuments: ({ id }) =>
+      Effect.gen(function* () {
+        const entityRepo = yield* EntityRepository;
+        const resolvedId = yield* resolveEntityId(id, entityRepo);
+        const docs = yield* entityRepo.getRelatedDocuments(resolvedId);
+        return docs.map((doc) => ({
+          id: doc.id,
+          title: doc.title,
+          source: doc.source,
+          resourceName: doc.resourceName,
+          sourceKey: doc.sourceKey,
+          sizeBytes: doc.sizeBytes,
+          createdAt: new Date(doc.createdAt).toISOString(),
+          updatedAt: new Date(doc.updatedAt).toISOString(),
+        }));
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+    getDocument: ({ id }) =>
+      Effect.gen(function* () {
+        const docRepo = yield* DocumentRepository;
+        const opt = yield* docRepo.findDocumentById(id);
+        return opt.pipe(Option.map(mapDocumentToResult), Option.getOrNull);
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+    graphRag: (query) =>
+      Effect.gen(function* () {
+        const service = yield* GraphRAGService;
+        const bundle = yield* service.retrieveContext({
+          query: query.query,
+          topK: query.topK,
+          maxHops: query.maxHops,
+          minConfidence: query.minConfidence,
+          relationTypes: query.relationTypes,
+        });
+
+        return {
+          query: bundle.query,
+          entities: bundle.entities.map(mapEntityToResult),
+          relationships: bundle.relationships.map((e) => ({
+            sourceId: e.sourceId,
+            targetId: e.targetId,
+            relationType: e.relationType,
+            weight: e.weight,
+            confidence: e.confidence,
+            properties: e.properties,
+          })),
+          relevantChunks: bundle.relevantChunks.map((c) => ({
+            chunkId: c.chunkId,
+            documentId: c.documentId,
+            content: c.content,
+            score: c.score,
+            metadata: c.metadata,
+          })),
+          formattedContextPrompt: bundle.formattedContextPrompt,
+          metadata: bundle.metadata,
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+    findPaths: (query) =>
+      Effect.gen(function* () {
+        const entityRepo = yield* EntityRepository;
+        const graphRepo = yield* GraphRepository;
+
+        const resolvedSourceId = yield* resolveEntityId(
+          query.sourceEntityId,
+          entityRepo,
+        );
+        const resolvedTargetId = yield* resolveEntityId(
+          query.targetEntityId,
+          entityRepo,
+        );
+
+        const result = yield* graphRepo.findPaths({
+          sourceEntityId: resolvedSourceId,
+          targetEntityId: resolvedTargetId,
+          maxDepth: query.maxDepth,
+          relationTypes: query.relationTypes,
+          direction: query.direction,
+        });
+
+        const allEntityIds = Array.from(
+          new Set(result.paths.flatMap((p) => Array.from(p.entityIds))),
+        );
+        const entities = yield* fetchEntitiesByIds(allEntityIds, entityRepo);
+
+        return {
+          paths: result.paths.map((p) => ({
+            entityIds: Array.from(p.entityIds),
+            edges: p.edges.map((e) => ({
+              sourceId: e.sourceId,
+              targetId: e.targetId,
+              relationType: e.relationType,
+              weight: e.weight,
+              confidence: e.confidence,
+              properties: e.properties,
+            })),
+            totalWeight: p.totalWeight,
+          })),
+          entities: Array.from(entities),
+          shortestPathLength: result.shortestPathLength,
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+
+    ask: ({ query, topK = 5, maxHops = 2, generateAnswer = false }) =>
+      Effect.gen(function* () {
+        const graphRagService = yield* GraphRAGService;
+        const bundle = yield* graphRagService.retrieveContext({
+          query,
+          topK,
+          maxHops,
+        });
+
+        const citations: Citation[] = bundle.relevantChunks.map((chunk) => {
+          const meta = chunk.metadata ?? {};
+
+          const sourceUri =
+            typeof meta.sourceUri === "string"
+              ? meta.sourceUri
+              : `doc://${chunk.documentId}`;
+
+          const title =
+            typeof meta.title === "string"
+              ? meta.title
+              : `Document ${chunk.documentId}`;
+
+          const excerpt =
+            chunk.content.length > 250
+              ? `${chunk.content.slice(0, 247)}...`
+              : chunk.content;
+
+          return {
+            documentId: chunk.documentId,
+            chunkId: chunk.chunkId,
+            sourceUri,
+            title,
+            excerpt,
+          };
+        });
+
+        const groundedEntities = bundle.entities.map(mapEntityToResult);
+
+        const groundedRelationships = bundle.relationships.map((e) => ({
+          sourceId: e.sourceId,
+          targetId: e.targetId,
+          relationType: e.relationType,
+          weight: e.weight,
+          confidence: e.confidence,
+          properties: e.properties,
+        }));
+
+        let answer = "";
+        if (generateAnswer) {
+          const useForAskSecret = yield* config.llm.useForAsk.get;
+          const useForAsk = parseBooleanSecret(useForAskSecret, false);
+
+          if (useForAsk) {
+            const maybeLlmService =
+              yield* Effect.serviceOption(LlmSynthesisService);
+            if (Option.isSome(maybeLlmService)) {
+              answer = yield* maybeLlmService.value
+                .synthesizeAnswer(query, bundle)
+                .pipe(
+                  Effect.catchTag("LlmSynthesisError", (err) =>
+                    Effect.logWarning(
+                      `LLM synthesis failed, falling back to deterministic answer: ${err.message}`,
+                    ).pipe(Effect.as(synthesizeAnswerText(query, bundle))),
+                  ),
+                );
             } else {
               answer = synthesizeAnswerText(query, bundle);
             }
+          } else {
+            answer = synthesizeAnswerText(query, bundle);
           }
+        }
 
-          const topScore = bundle.relevantChunks[0]?.score ?? 0.5;
-          const confidenceScore = Number(
-            Math.max(0.1, Math.min(0.99, topScore)).toFixed(4),
-          );
+        const topScore = bundle.relevantChunks[0]?.score ?? 0.5;
+        const confidenceScore = Number(
+          Math.max(0.1, Math.min(0.99, topScore)).toFixed(4),
+        );
 
-          return {
-            question: query,
-            answer,
-            citations,
-            groundedEntities,
-            groundedRelationships,
-            confidenceScore,
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
+        return {
+          question: query,
+          answer,
+          citations,
+          groundedEntities,
+          groundedRelationships,
+          confidenceScore,
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
 
-      getOverview: () =>
-        Effect.gen(function* () {
-          const docRepo = yield* DocumentRepository;
-          const chunkRepo = yield* ChunkRepository;
-          const entityRepo = yield* EntityRepository;
-          const graphRepo = yield* GraphRepository;
-          const checkpointRepo = yield* CheckpointRepository;
+    getOverview: () =>
+      Effect.gen(function* () {
+        const docRepo = yield* DocumentRepository;
+        const chunkRepo = yield* ChunkRepository;
+        const entityRepo = yield* EntityRepository;
+        const graphRepo = yield* GraphRepository;
+        const checkpointRepo = yield* CheckpointRepository;
 
-          const [
-            totalDocuments,
-            totalChunks,
-            totalEntities,
-            totalRelationships,
-            lastSyncOpt,
-          ] = yield* Effect.all(
-            [
-              docRepo.count(),
-              chunkRepo.count(),
-              entityRepo.count(),
-              graphRepo.countEdges(),
-              checkpointRepo.getLatestSyncTime(),
-            ],
-            { concurrency: 5 },
-          );
+        const [
+          totalDocuments,
+          totalChunks,
+          totalEntities,
+          totalRelationships,
+          lastSyncOpt,
+        ] = yield* Effect.all(
+          [
+            docRepo.count(),
+            chunkRepo.count(),
+            entityRepo.count(),
+            graphRepo.countEdges(),
+            checkpointRepo.getLatestSyncTime(),
+          ],
+          { concurrency: 5 },
+        );
 
-          const lastSynchronizedAt = Option.map(lastSyncOpt, (d) =>
-            d.toISOString(),
-          ).pipe(Option.getOrNull);
+        const lastSynchronizedAt = Option.map(lastSyncOpt, (d) =>
+          d.toISOString(),
+        ).pipe(Option.getOrNull);
 
-          const supportedSources = [...SourceTypeSchema.literals];
+        const supportedSources = [...SourceTypeSchema.literals];
 
-          return {
-            totalDocuments,
-            totalChunks,
-            totalEntities,
-            totalRelationships,
-            supportedSources,
-            lastSynchronizedAt,
-          };
-        }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
-    };
+        return {
+          totalDocuments,
+          totalChunks,
+          totalEntities,
+          totalRelationships,
+          supportedSources,
+          lastSynchronizedAt,
+        };
+      }).pipe(Effect.provide(pipelineLayer), Effect.orDie),
   }),
-);
+});

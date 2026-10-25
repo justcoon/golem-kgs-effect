@@ -473,7 +473,7 @@ Automatically exposes `KnowledgeAccessAgent` as an MCP server with Streamable HT
 
 - Node.js >= 20
 - Docker Desktop
-- [Golem CLI](https://learn.golem.cloud/install) >= 1.5.0
+- [Golem CLI](https://learn.golem.cloud/install) >= 1.6.0
 - Ollama with `nomic-embed-text` (embeddings) and `qwen2.5:1.5b` or `llama3.2:3b` (question-answering synthesis):
   ```bash
   ollama pull nomic-embed-text

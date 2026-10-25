@@ -22,7 +22,7 @@ import {
   WebConnectorService,
   WebPageConnector,
 } from "../src/connectors/web-connector.js";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import {
   makeS3ConnectorLayer,
   makeWebConnectorLayer,

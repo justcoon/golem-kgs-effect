@@ -30,17 +30,17 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
     "Durable Web Page / Documentation ingestion task worker bound 1:1 to a web resource target",
   mode: "durable",
   config: AppAgentConfig,
-  constructorParams: {
+  id: {
     resourceName: Schema.String,
   },
   http: Http.mount("/api/ingestion/web/{resourceName}", { cors: ["*"] }),
-  snapshot: Snapshot.define({
+  snapshotting: Snapshot.define({
     schema: WebTaskStateSchema,
     policy: Snapshot.policy.everyN(5),
   }),
   methods: {
     sync: method({
-      params: {
+      input: {
         force: Schema.optional(Schema.Boolean),
       },
       success: WebTaskStatusResponseSchema,
@@ -49,20 +49,20 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
       http: [Http.post("/sync")],
     }),
     getStatus: method({
-      params: {},
+      input: {},
       success: WebTaskStatusResponseSchema,
       description: "Returns the current synchronization state and metrics",
       http: [Http.get("/status")],
     }),
     resetCursor: method({
-      params: {},
+      input: {},
       success: WebTaskStatusResponseSchema,
       description:
         "Resets the sync cursor to force a full rescan on the next sync",
       http: [Http.post("/reset")],
     }),
     startSchedule: method({
-      params: {
+      input: {
         intervalSeconds: Schema.Number,
       },
       success: WebTaskStatusResponseSchema,
@@ -70,13 +70,13 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
       http: [Http.post("/schedule/start")],
     }),
     stopSchedule: method({
-      params: {},
+      input: {},
       success: WebTaskStatusResponseSchema,
       description: "Stops recurring synchronization for this Web resource",
       http: [Http.post("/schedule/stop")],
     }),
     scheduledTick: method({
-      params: {},
+      input: {},
       success: Schema.Boolean,
       description:
         "Called by Golem host timer to execute scheduled sync and schedule next cycle",
@@ -84,41 +84,43 @@ export const WebIngestorTaskAgentDefinition = defineAgent({
   },
 });
 
-export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
-  ({ resourceName }, snapshot) =>
+export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement<
+  Ref.Ref<WebTaskState>
+>({
+  init: ({ resourceName }) =>
+    Ref.make<WebTaskState>({
+      resourceName,
+      status: "IDLE",
+      lastSyncTimestamp: null,
+      cursor: null,
+      metrics: {
+        totalDiscovered: 0,
+        totalSynced: 0,
+        totalFailed: 0,
+        lastDurationMs: 0,
+      },
+      errorMessage: null,
+      scheduleRunning: false,
+      scheduleIntervalSeconds: null,
+      lastScheduledAt: null,
+    }),
+
+  methods: (state) =>
     Effect.gen(function* () {
+      const { resourceName } = yield* Ref.get(state);
       const config = yield* AppAgentConfig;
       const pipelineLayer = yield* makeWebTaskAgentLayer(config, resourceName);
 
-      const state = yield* snapshot.init({
-        resourceName,
-        status: "IDLE",
-        lastSyncTimestamp: null,
-        cursor: null,
-        metrics: {
-          totalDiscovered: 0,
-          totalSynced: 0,
-          totalFailed: 0,
-          lastDurationMs: 0,
-        },
-        errorMessage: null,
-        scheduleRunning: false,
-        scheduleIntervalSeconds: null,
-        lastScheduledAt: null,
-      });
-
-      yield* Effect.logInfo("WebIngestorTaskAgent initialized").pipe(
-        Effect.annotateLogs({ resourceName }),
-      );
-
       const scheduleNext = (intervalSeconds: number) =>
-        Effect.gen(function* () {
-          const scheduledAt = calculateScheduledAt(intervalSeconds);
-          const self = yield* WebIngestorTaskAgentDefinition.client.get({
-            resourceName,
-          });
-          yield* self.scheduledTick.schedule(scheduledAt, {});
-        });
+        Effect.scoped(
+          Effect.gen(function* () {
+            const scheduledAt = calculateScheduledAt(intervalSeconds);
+            const self = yield* WebIngestorTaskAgentDefinition.client.get({
+              resourceName,
+            });
+            yield* self.scheduledTick.schedule(scheduledAt, {});
+          }).pipe(Effect.orDie),
+        );
 
       const doSync = (force?: boolean) =>
         Effect.gen(function* () {
@@ -132,7 +134,7 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
 
           const result = yield* runWebIngestion(resourceName, currentState, {
             force,
-          }).pipe(Effect.provide(pipelineLayer));
+          }).pipe(Effect.provide(pipelineLayer), Effect.orDie);
 
           const updated = yield* Ref.updateAndGet(state, (s) => ({
             ...s,
@@ -154,6 +156,7 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
           Effect.gen(function* () {
             const checkpointRepo = yield* CheckpointRepository.pipe(
               Effect.provide(pipelineLayer),
+              Effect.orDie,
             );
             yield* checkpointRepo
               .deleteCheckpoint(`web_${resourceName}`)
@@ -217,4 +220,6 @@ export const WebIngestorTaskAgent = WebIngestorTaskAgentDefinition.implement(
           }).pipe(Effect.orDie),
       };
     }),
-);
+
+  snapshot: Snapshot.ref<WebTaskState>(),
+});

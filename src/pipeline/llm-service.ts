@@ -1,5 +1,5 @@
 import { Context, Data, Effect, Layer } from "effect";
-import { LanguageModel } from "effect/unstable/ai";
+import { LanguageModel } from "effect/ai";
 import { type GraphRAGContextBundle } from "../domain/query.js";
 import {
   formatContextPrompt,

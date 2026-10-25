@@ -1,6 +1,6 @@
-import { Effect, Layer, Option } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { SqlClient } from "effect/unstable/sql";
+import { Effect, Layer } from "effect";
+import { FetchHttpClient } from "effect/http";
+import { SqlClient } from "effect/sql";
 import {
   CheckpointRepository,
   ChunkRepository,
@@ -86,12 +86,50 @@ export const makeIngestionSemanticLayer = <E, R>(
   >,
 ) =>
   Effect.gen(function* () {
-    const extractionVal = yield* config.extraction;
-    const extractionRules: ExtractionConfig | undefined = Option.isOption(
-      extractionVal,
-    )
-      ? (Option.getOrUndefined(extractionVal) as ExtractionConfig | undefined)
-      : (extractionVal as ExtractionConfig | undefined);
+    const dictionary = yield* config.extraction.dictionary;
+    const relationPatterns = yield* config.extraction.relationPatterns;
+    const stopwords = yield* config.extraction.stopwords;
+    const cooccurrenceEnabled = yield* config.extraction.cooccurrence.enabled;
+    const cooccurrenceWindow = yield* config.extraction.cooccurrence.window;
+    const cooccurrenceConfidence =
+      yield* config.extraction.cooccurrence.confidence;
+    const cooccurrenceRelation = yield* config.extraction.cooccurrence.relation;
+    const cooccurrenceMaxEdges =
+      yield* config.extraction.cooccurrence.maxEdgesPerChunk;
+
+    const hasCooccurrence =
+      cooccurrenceEnabled !== undefined ||
+      cooccurrenceWindow !== undefined ||
+      cooccurrenceConfidence !== undefined ||
+      cooccurrenceRelation !== undefined ||
+      cooccurrenceMaxEdges !== undefined;
+
+    const cooccurrence = hasCooccurrence
+      ? {
+          enabled: cooccurrenceEnabled,
+          window: cooccurrenceWindow,
+          confidence: cooccurrenceConfidence,
+          relation: cooccurrenceRelation,
+          maxEdgesPerChunk: cooccurrenceMaxEdges,
+        }
+      : undefined;
+
+    const hasExtraction =
+      dictionary !== undefined ||
+      relationPatterns !== undefined ||
+      stopwords !== undefined ||
+      cooccurrence !== undefined;
+
+    const extractionRules: ExtractionConfig | undefined = hasExtraction
+      ? {
+          dictionary: dictionary ? Array.from(dictionary) : undefined,
+          relationPatterns: relationPatterns
+            ? Array.from(relationPatterns)
+            : undefined,
+          stopwords: stopwords ? Array.from(stopwords) : undefined,
+          cooccurrence,
+        }
+      : undefined;
 
     const extractionLayer = ExtractionService.make(extractionRules);
     const resolverLayer = EntityResolverService.Default.pipe(
