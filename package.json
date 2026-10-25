@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@effect/ai-openai": "4.0.0",
-    "@golemcloud/effect-golem": "2.0.0",
+    "@golemcloud/effect-golem": "2.0.1",
     "effect": "4.0.0",
     "node-html-markdown": "^2.0.0"
   },
